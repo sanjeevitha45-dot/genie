@@ -1,0 +1,216 @@
+---
+name: Artisan Commerce
+colors:
+  surface: '#f9f9ff'
+  surface-dim: '#d0daef'
+  surface-bright: '#f9f9ff'
+  surface-container-lowest: '#ffffff'
+  surface-container-low: '#eff3ff'
+  surface-container: '#e6eeff'
+  surface-container-high: '#dee9fd'
+  surface-container-highest: '#d9e3f7'
+  on-surface: '#121c2a'
+  on-surface-variant: '#414844'
+  inverse-surface: '#273140'
+  inverse-on-surface: '#ebf1ff'
+  outline: '#717973'
+  outline-variant: '#c1c8c2'
+  surface-tint: '#3f6653'
+  primary: '#012d1d'
+  on-primary: '#ffffff'
+  primary-container: '#1b4332'
+  on-primary-container: '#86af99'
+  inverse-primary: '#a5d0b9'
+  secondary: '#356855'
+  on-secondary: '#ffffff'
+  secondary-container: '#b5ebd3'
+  on-secondary-container: '#396c59'
+  tertiary: '#152b1c'
+  on-tertiary: '#ffffff'
+  tertiary-container: '#2a4131'
+  on-tertiary-container: '#93ad98'
+  error: '#ba1a1a'
+  on-error: '#ffffff'
+  error-container: '#ffdad6'
+  on-error-container: '#93000a'
+  primary-fixed: '#c1ecd4'
+  primary-fixed-dim: '#a5d0b9'
+  on-primary-fixed: '#002114'
+  on-primary-fixed-variant: '#274e3d'
+  secondary-fixed: '#b8eed6'
+  secondary-fixed-dim: '#9cd2ba'
+  on-secondary-fixed: '#002116'
+  on-secondary-fixed-variant: '#1b4f3e'
+  tertiary-fixed: '#cee9d3'
+  tertiary-fixed-dim: '#b3cdb7'
+  on-tertiary-fixed: '#092012'
+  on-tertiary-fixed-variant: '#354c3b'
+  background: '#f9f9ff'
+  on-background: '#121c2a'
+  surface-variant: '#d9e3f7'
+typography:
+  display:
+    fontFamily: DM Sans
+    fontSize: 40px
+    fontWeight: '700'
+    lineHeight: 48px
+    letterSpacing: -0.02em
+  headline-lg:
+    fontFamily: DM Sans
+    fontSize: 32px
+    fontWeight: '700'
+    lineHeight: 40px
+    letterSpacing: -0.02em
+  headline-lg-mobile:
+    fontFamily: DM Sans
+    fontSize: 26px
+    fontWeight: '700'
+    lineHeight: 34px
+    letterSpacing: -0.01em
+  headline-md:
+    fontFamily: DM Sans
+    fontSize: 24px
+    fontWeight: '600'
+    lineHeight: 32px
+    letterSpacing: -0.01em
+  headline-sm:
+    fontFamily: DM Sans
+    fontSize: 20px
+    fontWeight: '600'
+    lineHeight: 28px
+  title-md:
+    fontFamily: DM Sans
+    fontSize: 16px
+    fontWeight: '600'
+    lineHeight: 24px
+  body-lg:
+    fontFamily: Inter
+    fontSize: 16px
+    fontWeight: '400'
+    lineHeight: 24px
+  body-md:
+    fontFamily: Inter
+    fontSize: 14px
+    fontWeight: '400'
+    lineHeight: 20px
+  body-sm:
+    fontFamily: Inter
+    fontSize: 13px
+    fontWeight: '400'
+    lineHeight: 18px
+  label-md:
+    fontFamily: Inter
+    fontSize: 13px
+    fontWeight: '500'
+    lineHeight: 18px
+  label-sm:
+    fontFamily: Inter
+    fontSize: 11px
+    fontWeight: '600'
+    lineHeight: 16px
+    letterSpacing: 0.04em
+  code-num:
+    fontFamily: Inter
+    fontSize: 13px
+    fontWeight: '500'
+    lineHeight: 18px
+rounded:
+  sm: 0.125rem
+  DEFAULT: 0.25rem
+  md: 0.375rem
+  lg: 0.5rem
+  xl: 0.75rem
+  full: 9999px
+spacing:
+  gutter: 1.25rem
+  gutter-mobile: 0.75rem
+  margin: 2rem
+  margin-mobile: 1rem
+  space-xs: 0.25rem
+  space-sm: 0.5rem
+  space-md: 1rem
+  space-lg: 1.5rem
+  space-xl: 2.5rem
+---
+
+## Brand & Style
+
+This design system embodies refined utility tailored for independent retail, specialty cafés, and hospitality operators. It balances the precision of an enterprise logistics tool with the warm, tactile sensibility of modern coffee culture. The aesthetic leans into Contemporary Editorial Minimalism—uncluttered, disciplined, and calm under high operational velocity.
+
+The interface prioritizes cognitive clarity during peak business hours. Key data points (reorder thresholds, waste logs, and par levels) are rendered with quiet authority rather than flashy dashboards. Visual weight stems from crisp typography, purposeful spacing, and structured status communication.
+
+## Colors
+
+The palette establishes an organic, grounding presence suited for food and beverage inventory:
+
+- **Primary (`#1B4332`)**: Deep Forest Green. Anchors top-level navigation, primary call-to-actions, and active indicator states.
+- **Secondary (`#74A892`)**: Muted Sage. Drives supporting actions, secondary charts, and contextual controls.
+- **Tertiary (`#D8F3DC`)**: Pale Meadow. Provides gentle highlight surfaces, badge backdrops, and active row fills.
+- **Neutral (`#374151`)**: Slate Charcoal. Powers body text and data tables, supported by `#111827` for high-emphasis headlines and `#E5E7EB` / `#E2E8F0` for subtle containment borders.
+- **Canvas & Surfaces**: `#FFFFFF` for primary cards and tables; `#F8FAF9` (porcelain off-white) for the app canvas backdrop to eliminate clinical eye strain.
+- **Stock Health States**:
+  - *Optimal*: Background `#E8F5E9`, text/border `#1B4332`.
+  - *Low Stock*: Background `#FEF3C7`, text/border `#92400E`.
+  - *Critical / Out*: Background `#FEE2E2`, text/border `#991B1B`.
+  - *Expiring Soon*: Background `#EDE9FE`, text/border `#5B21B6`.
+
+## Typography
+
+The pairing combines geometric humanism in the headers (**DM Sans**) with rigorous typographic utility in data dense screens (**Inter**):
+
+- Headlines set in DM Sans establish a modern, design-forward commercial identity with tight, controlled tracking.
+- Inter handles all data grids, metadata rows, and metrics displays. `tabular-nums` must be enabled across all inventory numbers, prices, and quantities to maintain strict vertical alignment across columns.
+- Uppercase styling is reserved strictly for `label-sm` (e.g., table headers, metadata descriptors, and inventory tags), styled with positive letter spacing to maintain legibility at micro scales.
+
+## Layout & Spacing
+
+The layout is structured around an 8px base grid within a responsive fluid layout framework:
+
+- **Desktop (1280px+)**: 12-column grid, 240px persistent collateral navigation bar, `2rem` outer page margins, and `1.25rem` gutters. Inventory tables take full canvas width with sticky column headers and action footers.
+- **Tablet (768px - 1279px)**: 8-column grid with collapsible drawer navigation, `1.5rem` margins. Complex tables shift to horizontally scrollable viewports with locked primary identification columns (e.g., SKU and Item Name).
+- **Mobile (< 768px)**: 4-column grid, `1rem` outer canvas padding, and `0.75rem` column gaps. Tables reflow into segmented inventory summary cards showing critical status, current on-hand units, and rapid recount actions.
+
+## Elevation & Depth
+
+This design system avoids deep Drop shadows, artificial skeuomorphism, and heavy layered blur in favor of structured architectural surface boundaries:
+
+- **Base Layer**: Default canvas rests on `#F8FAF9`.
+- **Surface Layer**: Cards, data tables, and modules sit on pure `#FFFFFF` with a crisp 1px stroke of `#E5E7EB`.
+- **Hover & Focus Depth**: Active interactive cards transition to border color `#D1D5DB` with a subtle ambient shadow: `0 2px 4px -1px rgba(27, 67, 50, 0.04), 0 4px 6px -2px rgba(27, 67, 50, 0.02)`.
+- **Modals & Flyouts**: Elevated panels (such as rapid-reorder side-drawers) use a defined 1px border `#E5E7EB` combined with a soft atmospheric drop: `0 20px 25px -5px rgba(17, 24, 39, 0.08), 0 8px 10px -6px rgba(17, 24, 39, 0.04)`.
+
+## Shapes
+
+The interface utilizes a clean, low-radius architectural form language:
+
+- **Base Components**: Inputs, standard buttons, dropdown triggers, and alert banners use `0.25rem` (4px).
+- **Cards & Data Containers**: Main data tables, overview metric panels, and modals use `rounded-lg` (`0.5rem` / 8px).
+- **Status Badges & Chips**: Stock health pills and tag markers use full circle pill encapsulation (`9999px`) to create clear geometric contrast against rectilinear data tables.
+
+## Components
+
+### Buttons
+- **Primary**: Solid `#1B4332`, text `#FFFFFF`, hover `#164E37`, focus ring 2px `#74A892` offset by 2px white.
+- **Secondary**: Crisp `#FFFFFF` surface with 1px `#E5E7EB` border, text `#374151`, hover background `#F8FAF9` and border `#D1D5DB`.
+- **Destructive**: Minimal background `#FEE2E2`, text `#991B1B`, hover `#FCD34D` equivalent red tint.
+
+### Data Tables & Cell Density
+- **Table Structure**: Pure `#FFFFFF` background, header cells formatted in `label-sm` with text `#6B7280` and subtle bottom divider `#E5E7EB`.
+- **Density**: Rows standard at 48px height with 12px vertical cell padding for rapid scannability on desktop point-of-sale displays. Numeric fields aligned right with monospace figures.
+- **Row Highlight**: On hover, background shifts to `#F8FAF9`. Selected rows utilize `#D8F3DC` at 30% opacity.
+
+### Status Indicators & Badges
+- Pill-shaped badges (18px height, `label-sm` font size):
+  - **In Stock**: Background `#D8F3DC`, text `#1B4332`, dot indicator `#1B4332`.
+  - **Low Stock**: Background `#FEF3C7`, text `#92400E`, dot indicator `#D97706`.
+  - **Critical / Out**: Background `#FEE2E2`, text `#991B1B`, dot indicator `#DC2626`.
+  - **Expiring Soon**: Background `#EDE9FE`, text `#5B21B6`, dot indicator `#7C3AED`.
+
+### Input Fields & Controls
+- Form controls feature a 36px height, pure `#FFFFFF` background, and 1px `#D1D5DB` border.
+- Focus state shifts the border immediately to `#1B4332` with a 1px matching outline, avoiding saturated glow effects.
+- Unit adornments (e.g., "kg", "bags", "bottles") use `body-sm` `#6B7280` affixed inside the right container edge.
+
+### Stock Health Summary Cards
+- Metric cards display total inventory valuation, depleted items count, and incoming shipments.
+- Contained in 1px `#E5E7EB` borders, pure `#FFFFFF` fill, displaying the headline metric in `headline-md` DM Sans alongside a contextual micro sparkline or status badge.

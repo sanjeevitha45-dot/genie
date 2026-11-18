@@ -1,0 +1,6 @@
+{
+  "name": "Artisan Commerce",
+  "description": "Inventory, par-level, and procurement operations platform for specialty cafés, roasteries, and independent retail.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
