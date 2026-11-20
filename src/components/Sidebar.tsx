@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Bot,
   ClipboardList,
   ClockAlert,
   Leaf,
@@ -75,8 +76,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'customer-rag',
-      label: 'Customer Assistant (RAG)',
-      icon: <Sparkles className="w-4 h-4 shrink-0 text-[#2D6A4F]" />,
+      label: 'AI Chatbot & Concierge',
+      icon: <Bot className="w-4 h-4 shrink-0 text-[#2D6A4F]" />,
     },
   ];
 

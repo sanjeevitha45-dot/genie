@@ -10,6 +10,7 @@ import { SummaryCards } from './components/SummaryCards';
 import { SuppliersView } from './components/SuppliersView';
 import { WasteLogView } from './components/WasteLogView';
 import { CustomerRAGView } from './components/CustomerRAGView';
+import { ChatWidget } from './components/ChatWidget';
 import {
   checkBackendHealth,
   fetchInventory,
@@ -106,8 +107,8 @@ const SCREEN_META: Record<
     subtitle: 'Active wholesale vendors, lead times, payment terms, and SKU assignments.',
   },
   'customer-rag': {
-    title: 'Customer Assistant & RAG System',
-    subtitle: 'AI customer response concierge grounded in live store inventory, operating hours, and dietary policies.',
+    title: 'Artisan Concierge — AI Chatbot',
+    subtitle: 'Conversational assistant with multi-turn memory grounded in live store inventory, orders, and policies.',
   },
 };
 
@@ -729,6 +730,7 @@ export default function App() {
             <CustomerRAGView
               inventory={scopedInventory}
               selectedLocation={selectedLocation}
+              purchaseOrders={scopedPOs}
             />
           )}
         </main>
@@ -778,12 +780,18 @@ export default function App() {
         onSaveWaste={handleSaveWaste}
       />
 
+      {/* Global RAG-powered Customer Chatbot Widget */}
+      <ChatWidget
+        selectedLocation={selectedLocation}
+        onOpenFullApp={() => setActiveScreen('customer-rag')}
+      />
+
       {/* Non-intrusive Toast Notification */}
       {toastMessage && (
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-5 right-5 z-50 bg-[#1B4332] text-white px-4 py-2.5 rounded-lg shadow-[0_20px_25px_-5px_rgba(17,24,39,0.12)] flex items-center gap-2 text-[13px] font-medium"
+          className="fixed bottom-5 left-5 z-50 bg-[#1B4332] text-white px-4 py-2.5 rounded-lg shadow-[0_20px_25px_-5px_rgba(17,24,39,0.12)] flex items-center gap-2 text-[13px] font-medium"
         >
           <Check className="w-4 h-4 text-[#D8F3DC] shrink-0" />
           <span>{toastMessage}</span>

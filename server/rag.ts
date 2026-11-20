@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { InventoryItem, KnowledgeDoc, RAGContextChunk, RAGQueryResponse, Supplier } from '../src/types.js';
+import { InventoryItem, KnowledgeDoc, PurchaseOrder, RAGContextChunk, RAGQueryResponse, Supplier } from '../src/types.js';
 
 // Base Knowledge Base Documents (Locations, Policies, Dietary, Wholesale)
 export const KNOWLEDGE_CORPUS: KnowledgeDoc[] = [
@@ -79,12 +79,13 @@ function cleanTerms(text: string): string[] {
 }
 
 // -------------------------------------------------------------
-// RETRIEVAL ENGINE: Finds matching knowledge chunks & live inventory
+// RETRIEVAL ENGINE: Finds matching knowledge chunks, inventory & orders
 // -------------------------------------------------------------
 export function retrieveContextChunks(
   query: string,
   inventory: InventoryItem[],
   suppliers: Supplier[],
+  purchaseOrders: PurchaseOrder[] = [],
   filterLocation?: string
 ): RAGContextChunk[] {
   const queryTerms = cleanTerms(query);
@@ -102,7 +103,6 @@ export function retrieveContextChunks(
       else if (docTerms.includes(term)) score += 10;
     }
 
-    // Boost based on specific customer intent
     if ((qLower.includes('hour') || qLower.includes('open') || qLower.includes('close')) && doc.category === 'Locations & Hours') {
       score += 30;
     }
@@ -141,7 +141,6 @@ export function retrieveContextChunks(
     const nameLower = item.name.toLowerCase();
     const skuLower = item.sku.toLowerCase();
 
-    // Exact SKU match
     if (qLower.includes(skuLower)) {
       score += 85;
     }
@@ -152,7 +151,6 @@ export function retrieveContextChunks(
       if (item.locationId.includes(term)) score += 20;
     }
 
-    // Specific item inquiries (e.g. coffee, milk, croissant, matcha)
     if (qLower.includes('stock') || qLower.includes('available') || qLower.includes('have') || qLower.includes('left') || qLower.includes('price') || qLower.includes('cost')) {
       if (score > 10) score += 20;
     }
@@ -178,7 +176,44 @@ export function retrieveContextChunks(
     }
   }
 
-  // 3. Search Suppliers
+  // 3. Search Purchase Orders (Order Tracking application)
+  for (const po of purchaseOrders) {
+    let score = 0;
+    const poNumLower = po.poNumber.toLowerCase();
+
+    if (qLower.includes(poNumLower) || qLower.includes(poNumLower.replace('po-', ''))) {
+      score += 90;
+    }
+
+    if (qLower.includes('order') || qLower.includes('track') || qLower.includes('transit') || qLower.includes('status') || qLower.includes('delivery')) {
+      for (const term of queryTerms) {
+        if (poNumLower.includes(term)) score += 30;
+      }
+      for (const line of po.items) {
+        if (qLower.includes(line.itemName.toLowerCase())) score += 25;
+      }
+    }
+
+    if (score > 25) {
+      const itemsList = po.items.map((i) => `${i.orderedQty} ${i.unit} ${i.itemName}`).join(', ');
+      chunks.push({
+        id: `chunk-po-${po.id}`,
+        category: 'order',
+        title: `Purchase Order ${po.poNumber} (${po.status})`,
+        content: `Order: ${po.poNumber} | Status: ${po.status} | Destination Location: ${po.locationId.toUpperCase()} | Order Date: ${po.createdAt} | Expected Delivery: ${po.expectedDelivery}${po.receivedAt ? ` | Received Date: ${po.receivedAt}` : ''} | Items: ${itemsList}${po.notes ? ` | Notes: ${po.notes}` : ''}`,
+        relevanceScore: Math.min(99, Math.round(score)),
+        metadata: {
+          poNumber: po.poNumber,
+          status: po.status,
+          locationId: po.locationId,
+          expectedDelivery: po.expectedDelivery,
+          itemsSummary: itemsList,
+        },
+      });
+    }
+  }
+
+  // 4. Search Suppliers
   for (const s of suppliers) {
     let score = 0;
     const sNameLower = s.name.toLowerCase();
@@ -210,11 +245,17 @@ export function retrieveContextChunks(
 // -------------------------------------------------------------
 function synthesizeLocalGroundedResponse(query: string, chunks: RAGContextChunk[]): string {
   if (chunks.length === 0) {
-    return `Thank you for reaching out to Artisan Commerce! I couldn't find specific live records matching "${query}" in our inventory ledger or policy directory.\n\nCould you specify which store location (Flagship Roastery, Downtown Café, or Westside Bakery) or item you are inquiring about? Our team will be delighted to assist!`;
+    return `Thank you for reaching out to Artisan Commerce! I couldn't find specific live records matching "${query}" in our inventory ledger, active orders, or policy directory.\n\nCould you specify which store location (Flagship Roastery, Downtown Café, or Westside Bakery), PO tracking number, or item you are inquiring about? Our team will be delighted to assist!`;
   }
 
   const primaryChunk = chunks[0];
   const qLower = query.toLowerCase();
+
+  // Order Tracking Response
+  if (primaryChunk.category === 'order') {
+    const meta = primaryChunk.metadata || {};
+    return `Hello! Here is the live tracking status for **${primaryChunk.title}**:\n\n• **Status**: ${meta.status || 'Active'}\n• **Destination**: ${meta.locationId ? meta.locationId.toUpperCase() : 'Storefront'}\n• **Expected Delivery**: ${meta.expectedDelivery || 'Scheduled'}\n• **Items in Shipment**: ${meta.itemsSummary || 'Standard replenishment'}\n\nPlease let our operations desk know if you need to expedite or update delivery instructions!`;
+  }
 
   // Stock Inquiry Response
   if (primaryChunk.category === 'inventory') {
@@ -258,17 +299,42 @@ export async function executeCustomerRAG(
   query: string,
   inventory: InventoryItem[],
   suppliers: Supplier[],
-  filterLocation?: string
+  purchaseOrders: PurchaseOrder[] = [],
+  filterLocation?: string,
+  chatHistory: { role: 'user' | 'assistant'; content: string }[] = []
 ): Promise<RAGQueryResponse> {
-  const chunks = retrieveContextChunks(query, inventory, suppliers, filterLocation);
+  const chunks = retrieveContextChunks(query, inventory, suppliers, purchaseOrders, filterLocation);
   const apiKey = process.env.GEMINI_API_KEY;
 
-  const suggestedFollowUps: string[] = [
-    'Check availability at another location',
-    'What non-dairy milk options are gluten-free?',
-    'What are the weekend operating hours?',
-    'What is your return policy on retail whole beans?',
-  ];
+  // Tailored follow-up chips based on detected intent
+  const qLower = query.toLowerCase();
+  let suggestedFollowUps: string[] = [];
+
+  if (qLower.includes('stock') || qLower.includes('coffee') || qLower.includes('price')) {
+    suggestedFollowUps = [
+      'Do you have whole bean bags for home brewing?',
+      'Check availability at another location',
+      'Can you grind the beans for French Press?',
+    ];
+  } else if (qLower.includes('milk') || qLower.includes('gluten') || qLower.includes('vegan') || qLower.includes('allergy')) {
+    suggestedFollowUps = [
+      'What pastries are dairy-free or vegan?',
+      'Do you have almond milk options?',
+      'How do you prevent cross-contamination?',
+    ];
+  } else if (qLower.includes('order') || qLower.includes('po-') || qLower.includes('track')) {
+    suggestedFollowUps = [
+      'Track PO-2026-0841 status',
+      'What is the expected delivery date?',
+      'Who is the supplier for this order?',
+    ];
+  } else {
+    suggestedFollowUps = [
+      'What are your store hours this weekend?',
+      'What is your return policy on retail beans?',
+      'How do wholesale accounts work?',
+    ];
+  }
 
   // If Gemini API Key is provided, use Google GenAI
   if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
@@ -279,23 +345,39 @@ export async function executeCustomerRAG(
         ? chunks.map((c, i) => `[Source ${i + 1}: ${c.title} (${c.category})]\n${c.content}`).join('\n\n')
         : 'No specific store records found for this query.';
 
-      const systemPrompt = `You are the polite, knowledgeable, and warm customer service concierge for "Artisan Commerce" (a specialty café, micro-roastery, and artisan bakery group with locations: Flagship Roastery in Oakland, Downtown Café in San Francisco, and Westside Bakery in Berkeley).
+      const systemPrompt = `You are "Artisan Concierge", the friendly, conversational, and highly knowledgeable AI Chatbot for Artisan Commerce (specialty café, micro-roastery, and bakery locations: Flagship Roastery in Oakland, Downtown Café in San Francisco, and Westside Bakery in Berkeley).
 
-Your duty is to answer customer questions accurately by strictly grounding your responses in the retrieved store knowledge base provided below.
-- If the customer asks about stock or price, cite the exact quantities, locations, and prices found in the context.
-- If asking about dietary or allergens, be precise about gluten-free, dairy, or nut warnings.
-- Keep the tone hospitable, professional, and concise. Format with bullet points where helpful.
-- If the information is not in the context, politely let the customer know and offer store contact info.
+Guidelines:
+1. Always ground your answers strictly in the verified store context below. Never hallucinate stock quantities, prices, or policies.
+2. If asking about stock, state the exact on-hand amount, unit price, and store location.
+3. If asking about order tracking (e.g. PO numbers), give the exact status and delivery date.
+4. Keep the tone warm, welcoming, and concise like a premier barista or café host.
+5. If the context does not contain the answer, politely offer store contact info or offer to transfer to a staff member.
 
-=== RETRIEVED STORE CONTEXT ===
+=== VERIFIED STORE CONTEXT ===
 ${contextText}
-===============================`;
+==============================`;
+
+      // Build conversation turns
+      const contents: any[] = [];
+      contents.push({ role: 'user', parts: [{ text: systemPrompt }] });
+      contents.push({ role: 'model', parts: [{ text: 'Understood. I am Artisan Concierge, ready to assist customers with grounded store data.' }] });
+
+      for (const msg of chatHistory.slice(-4)) {
+        contents.push({
+          role: msg.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: msg.content }],
+        });
+      }
+
+      contents.push({
+        role: 'user',
+        parts: [{ text: `Customer Inquiry: "${query}"\n\nConcierge Response:` }],
+      });
 
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: [
-          { role: 'user', parts: [{ text: `${systemPrompt}\n\nCustomer Inquiry: "${query}"\n\nConcierge Response:` }] },
-        ],
+        contents,
       });
 
       const replyText = response.text || synthesizeLocalGroundedResponse(query, chunks);

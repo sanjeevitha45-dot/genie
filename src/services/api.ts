@@ -211,13 +211,18 @@ export async function seedDatabase(): Promise<{ success: boolean; mode?: string;
 
 export async function queryCustomerRAG(
   query: string,
-  location?: LocationId
+  location?: LocationId,
+  history?: { role: 'user' | 'assistant'; content: string }[]
 ): Promise<RAGQueryResponse | null> {
   try {
     const res = await fetch(`${API_BASE}/rag/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, location: location === 'all' ? undefined : location }),
+      body: JSON.stringify({
+        query,
+        location: location === 'all' ? undefined : location,
+        history,
+      }),
     });
     if (!res.ok) return null;
     return await res.json();

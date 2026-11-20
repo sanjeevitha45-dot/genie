@@ -105,11 +105,21 @@ export interface Supplier {
 
 export interface RAGContextChunk {
   id: string;
-  category: 'inventory' | 'location' | 'policy' | 'supplier' | 'allergen';
+  category: 'inventory' | 'location' | 'policy' | 'supplier' | 'allergen' | 'order';
   title: string;
   content: string;
   relevanceScore: number; // 0 - 100
   metadata?: Record<string, any>;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+  retrievedChunks?: RAGContextChunk[];
+  suggestedFollowUps?: string[];
+  modelUsed?: string;
 }
 
 export interface RAGQueryResponse {

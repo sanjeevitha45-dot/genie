@@ -708,14 +708,15 @@ app.post('/api/seed', async (_req: Request, res: Response) => {
 // CUSTOMER RAG (RETRIEVAL-AUGMENTED GENERATION) ENDPOINTS
 // -------------------------------------------------------------
 app.post('/api/rag/query', async (req: Request, res: Response) => {
-  const { query, location } = req.body;
+  const { query, location, history } = req.body;
   if (!query || typeof query !== 'string') {
     return res.status(400).json({ error: 'Query string is required' });
   }
 
-  // Get current inventory and suppliers
+  // Get current inventory, suppliers, and purchase orders
   let currentInventory = memoryInventory;
   let currentSuppliers = memorySuppliers;
+  let currentOrders = memoryOrders;
 
   if (isSupabaseConfigured()) {
     try {
@@ -723,6 +724,8 @@ app.post('/api/rag/query', async (req: Request, res: Response) => {
       if (invData && invData.length > 0) currentInventory = invData.map(mapDbToItem);
       const { data: supData } = await supabase.from('suppliers').select('*');
       if (supData && supData.length > 0) currentSuppliers = supData.map(mapDbToSupplier);
+      const { data: orderData } = await supabase.from('purchase_orders').select('*');
+      if (orderData && orderData.length > 0) currentOrders = orderData.map(mapDbToOrder);
     } catch {
       // Keep memory fallback
     }
@@ -733,7 +736,9 @@ app.post('/api/rag/query', async (req: Request, res: Response) => {
       query,
       currentInventory,
       currentSuppliers,
-      location
+      currentOrders,
+      location,
+      history
     );
     return res.json(ragResult);
   } catch (err: any) {

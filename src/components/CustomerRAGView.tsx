@@ -1,450 +1,577 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Bot,
   Check,
-  ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Copy,
   Database,
+  Download,
   ExternalLink,
   HelpCircle,
   Layers,
   MapPin,
   MessageSquare,
   Package,
+  RotateCcw,
   Search,
   Send,
   ShieldCheck,
   Sparkles,
+  Tag,
+  Trash2,
   Truck,
+  User,
 } from 'lucide-react';
 import { queryCustomerRAG, fetchKnowledgeBase } from '../services/api';
-import { InventoryItem, KnowledgeDoc, LocationId, RAGContextChunk, RAGQueryResponse } from '../types';
+import {
+  ChatMessage,
+  InventoryItem,
+  KnowledgeDoc,
+  LocationId,
+  PurchaseOrder,
+  RAGContextChunk,
+} from '../types';
 
 interface CustomerRAGViewProps {
   inventory: InventoryItem[];
   selectedLocation: LocationId;
+  purchaseOrders?: PurchaseOrder[];
 }
 
-const PRESET_QUERIES = [
+type ChatAppMode = 'all' | 'stock' | 'orders' | 'allergens' | 'locations';
+
+const QUICK_APPS: {
+  id: ChatAppMode;
+  label: string;
+  icon: string;
+  description: string;
+  suggestedPrompts: string[];
+}[] = [
   {
-    label: 'Stock: Ethiopia Guji',
-    text: 'Do we have Ethiopia Guji Whole Bean in stock, and what is the unit price?',
-    category: 'inventory',
+    id: 'all',
+    label: 'All-Round Concierge',
+    icon: '✨',
+    description: 'Ask anything about products, store hours, return policies, or orders.',
+    suggestedPrompts: [
+      'Do you have Ethiopia Guji Whole Bean in stock?',
+      'Is our Barista Edition Oat Milk gluten-free?',
+      'What are the weekend operating hours for Downtown Café?',
+      'What is our return policy on opened whole bean coffee bags?',
+    ],
   },
   {
-    label: 'Allergen: Oat Milk Gluten',
-    text: 'Is our Barista Edition Oat Milk certified gluten-free, and what are our dairy-free options?',
-    category: 'allergen',
+    id: 'stock',
+    label: 'Live Stock & Pricing',
+    icon: '☕',
+    description: 'Check real-time on-hand quantities, par thresholds, and retail prices.',
+    suggestedPrompts: [
+      'How much Velvet Canopy Espresso Blend do we have on hand?',
+      'Check stock for Barista Edition Oat Milk at Downtown Café',
+      'What is the price per kg of Colombia Huila Pink Bourbon?',
+      'Do we have compostable 12oz cups in stock at Westside Bakery?',
+    ],
   },
   {
-    label: 'Hours: Downtown Café',
-    text: 'What are the operating hours for the Downtown Café location on weekends?',
-    category: 'location',
+    id: 'orders',
+    label: 'Order Status Tracker',
+    icon: '📦',
+    description: 'Trace inbound purchase orders, fulfillment status, and delivery ETA.',
+    suggestedPrompts: [
+      'What is the status of purchase order PO-2026-0841?',
+      'Track incoming shipment for Straus & Meadow oat milk',
+      'When is PO-2026-0842 expected to arrive?',
+      'Show details for recent inbound deliveries',
+    ],
   },
   {
-    label: 'Policy: Coffee Returns',
-    text: 'A customer wants to know our return and exchange policy for retail whole bean coffee bags.',
-    category: 'policy',
+    id: 'allergens',
+    label: 'Dietary & Allergen Advisor',
+    icon: '🌾',
+    description: 'Allergen certifications, vegan alternatives, and milk safety standards.',
+    suggestedPrompts: [
+      'A customer has celiac disease. Is our oat milk safe and gluten-free?',
+      'What vegan pastry options do we have today?',
+      'Does the Almond Bostock contain tree nuts?',
+      'How do baristas prevent cross-contamination for dairy allergies?',
+    ],
   },
   {
-    label: 'Wholesale: Minimums & Roasts',
-    text: 'What is the minimum order value for wholesale accounts and when do you roast?',
-    category: 'wholesale',
+    id: 'locations',
+    label: 'Store Finder & Hours',
+    icon: '📍',
+    description: 'Operating schedules, address directions, phone numbers, and offerings.',
+    suggestedPrompts: [
+      'What are the hours and phone number for the Flagship Roastery?',
+      'Is Downtown Café open on Sunday?',
+      'What days is the Westside Bakery open in Berkeley?',
+      'Where can I pick up wholesale coffee will-call orders?',
+    ],
   },
 ];
 
 export const CustomerRAGView: React.FC<CustomerRAGViewProps> = ({
   inventory,
   selectedLocation,
+  purchaseOrders = [],
 }) => {
-  const [activeTab, setActiveTab] = useState<'assistant' | 'knowledge' | 'architecture'>('assistant');
-  const [queryInput, setQueryInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [currentResponse, setCurrentResponse] = useState<RAGQueryResponse | null>(null);
-  const [history, setHistory] = useState<RAGQueryResponse[]>([]);
-  const [copied, setCopied] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: 'msg-welcome',
+      sender: 'assistant',
+      text: `Hello! I am **Artisan Concierge**, your AI Chatbot powered by our live store **Retrieval-Augmented Generation (RAG)** system.\n\nI have real-time access to our **inventory ledger (${inventory.length} SKUs)**, **active purchase orders**, **store schedules**, and **dietary safety standards** across all locations.\n\nHow may I assist you today?`,
+      timestamp: 'Just now',
+      modelUsed: 'gemini-2.5-flash / rag',
+      suggestedFollowUps: [
+        'Do we have Ethiopia Guji in stock?',
+        'Is our oat milk certified gluten-free?',
+        'What are the Downtown Café weekend hours?',
+        'Track purchase order PO-2026-0841',
+      ],
+    },
+  ]);
 
-  // Knowledge Base Explorer State
+  const [inputQuery, setInputQuery] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [activeApp, setActiveApp] = useState<ChatAppMode>('all');
+  const [expandedChunks, setExpandedChunks] = useState<Record<string, boolean>>({});
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Knowledge Explorer Tab
+  const [activeTab, setActiveTab] = useState<'chat' | 'knowledge'>('chat');
   const [knowledgeCorpus, setKnowledgeCorpus] = useState<KnowledgeDoc[]>([]);
-  const [kbFilterCategory, setKbFilterCategory] = useState<string>('All');
-  const [kbSearchTerm, setKbSearchTerm] = useState('');
+  const [kbSearch, setKbSearch] = useState('');
+  const [kbCategory, setKbCategory] = useState('All');
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isTyping]);
 
   useEffect(() => {
     fetchKnowledgeBase().then((res) => {
-      if (res && res.corpus) {
-        setKnowledgeCorpus(res.corpus);
-      }
+      if (res && res.corpus) setKnowledgeCorpus(res.corpus);
     });
   }, []);
 
-  const handleExecuteQuery = async (queryText: string) => {
-    const q = queryText.trim();
-    if (!q) return;
+  const handleSendMessage = async (textToSend: string) => {
+    const q = textToSend.trim();
+    if (!q || isTyping) return;
 
-    setIsLoading(true);
-    const result = await queryCustomerRAG(q, selectedLocation);
+    const userMessage: ChatMessage = {
+      id: `usr-${Date.now()}`,
+      sender: 'user',
+      text: q,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
 
-    if (result) {
-      setCurrentResponse(result);
-      setHistory((prev) => [result, ...prev.slice(0, 7)]);
-    } else {
-      // Fallback response if offline
-      const fallback: RAGQueryResponse = {
-        query: q,
-        response: `Based on current local records for ${selectedLocation.toUpperCase()}:\n\nWe found matching products in our inventory. Please verify current quantities directly in the Inventory Ledger or contact store dispatch.`,
-        modelUsed: 'local-retrieval-synthesizer',
-        retrievedChunks: [],
-        timestamp: new Date().toISOString(),
-      };
-      setCurrentResponse(fallback);
-      setHistory((prev) => [fallback, ...prev]);
+    setMessages((prev) => [...prev, userMessage]);
+    setInputQuery('');
+    setIsTyping(true);
+
+    // Format chat history for context continuity
+    const historyPayload = messages
+      .filter((m) => m.id !== 'msg-welcome')
+      .slice(-4)
+      .map((m) => ({
+        role: m.sender,
+        content: m.text,
+      }));
+
+    try {
+      const result = await queryCustomerRAG(q, selectedLocation, historyPayload);
+
+      if (result) {
+        const botMessage: ChatMessage = {
+          id: `bot-${Date.now()}`,
+          sender: 'assistant',
+          text: result.response,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          retrievedChunks: result.retrievedChunks,
+          suggestedFollowUps: result.suggestedFollowUps,
+          modelUsed: result.modelUsed,
+        };
+        setMessages((prev) => [...prev, botMessage]);
+      } else {
+        const fallback: ChatMessage = {
+          id: `bot-${Date.now()}`,
+          sender: 'assistant',
+          text: `I've checked our local records for ${selectedLocation.toUpperCase()}, but could not find a direct answer. Please verify with our baristas or store dispatch.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          modelUsed: 'local-retrieval-synthesizer',
+        };
+        setMessages((prev) => [...prev, fallback]);
+      }
+    } catch {
+      // Fallback
+    } finally {
+      setIsTyping(false);
     }
-
-    setIsLoading(false);
   };
 
-  const handleCopyResponse = () => {
-    if (!currentResponse) return;
-    navigator.clipboard.writeText(currentResponse.response);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2200);
+  const handleCopyMessage = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const filteredKnowledge = knowledgeCorpus.filter((doc) => {
-    const matchesCategory = kbFilterCategory === 'All' || doc.category === kbFilterCategory;
-    const matchesSearch =
-      doc.title.toLowerCase().includes(kbSearchTerm.toLowerCase()) ||
-      doc.summary.toLowerCase().includes(kbSearchTerm.toLowerCase()) ||
-      doc.body.toLowerCase().includes(kbSearchTerm.toLowerCase());
-    return matchesCategory && matchesSearch;
-  });
+  const handleClearChat = () => {
+    setMessages([
+      {
+        id: `msg-${Date.now()}`,
+        sender: 'assistant',
+        text: `Conversation cleared. I am ready for your next customer inquiry or stock check!`,
+        timestamp: 'Just now',
+        modelUsed: 'gemini-2.5-flash / rag',
+        suggestedFollowUps: [
+          'Do we have Ethiopia Guji in stock?',
+          'Is our oat milk gluten-free?',
+          'What are the store hours for the Roastery?',
+        ],
+      },
+    ]);
+  };
+
+  const handleExportChat = () => {
+    const transcript = messages
+      .map((m) => `[${m.timestamp}] ${m.sender.toUpperCase()}:\n${m.text}\n`)
+      .join('\n----------------------------------------\n\n');
+    const blob = new Blob([transcript], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `artisan-concierge-chat-${Date.now()}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const toggleChunks = (msgId: string) => {
+    setExpandedChunks((prev) => ({ ...prev, [msgId]: !prev[msgId] }));
+  };
+
+  const currentAppConfig = QUICK_APPS.find((a) => a.id === activeApp) || QUICK_APPS[0];
 
   return (
-    <div className="space-y-6">
-      {/* Navigation Sub-Tabs */}
-      <div className="flex border-b border-[#E5E7EB] gap-6 text-[14px]">
-        <button
-          type="button"
-          onClick={() => setActiveTab('assistant')}
-          className={`pb-3 font-medium flex items-center gap-2 border-b-2 transition-colors ${
-            activeTab === 'assistant'
-              ? 'border-[#1B4332] text-[#1B4332]'
-              : 'border-transparent text-[#6B7280] hover:text-[#111827]'
-          }`}
-        >
-          <Bot className="w-4 h-4" />
-          Customer Response Concierge
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('knowledge')}
-          className={`pb-3 font-medium flex items-center gap-2 border-b-2 transition-colors ${
-            activeTab === 'knowledge'
-              ? 'border-[#1B4332] text-[#1B4332]'
-              : 'border-transparent text-[#6B7280] hover:text-[#111827]'
-          }`}
-        >
-          <Database className="w-4 h-4" />
-          Store Knowledge Base
-          <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-[#E5E7EB] text-[#374151]">
-            {knowledgeCorpus.length} Docs
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('architecture')}
-          className={`pb-3 font-medium flex items-center gap-2 border-b-2 transition-colors ${
-            activeTab === 'architecture'
-              ? 'border-[#1B4332] text-[#1B4332]'
-              : 'border-transparent text-[#6B7280] hover:text-[#111827]'
-          }`}
-        >
-          <Layers className="w-4 h-4" />
-          RAG Pipeline Architecture
-        </button>
-      </div>
-
-      {/* TAB 1: CUSTOMER CONCIERGE ASSISTANT */}
-      {activeTab === 'assistant' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column: Query Engine & Response (8 Cols) */}
-          <div className="lg:col-span-8 space-y-6">
-            {/* Input Card */}
-            <div className="bg-white rounded-lg border border-[#E5E7EB] p-5 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-sm font-semibold text-[#111827]">
-                  <Sparkles className="w-4 h-4 text-[#2D6A4F]" />
-                  <span>Ground Inquiry Against Live Store Data</span>
-                </div>
-                <span className="text-xs text-[#6B7280] flex items-center gap-1 font-mono">
-                  Scope: {selectedLocation === 'all' ? 'All 3 Stores' : selectedLocation.toUpperCase()}
+    <div className="space-y-4">
+      {/* Top Header & Application Selector */}
+      <div className="bg-white rounded-lg border border-[#E5E7EB] p-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E5E7EB] pb-3 mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-[#1B4332] text-white flex items-center justify-center shadow-sm">
+              <Bot className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-[#111827]">Artisan Concierge Chatbot</h2>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[#D8F3DC] text-[#1B4332]">
+                  <span className="w-2 h-2 rounded-full bg-[#2D6A4F] animate-pulse" />
+                  RAG Grounded Active
                 </span>
               </div>
-
-              {/* Form Input */}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleExecuteQuery(queryInput);
-                }}
-                className="flex items-center gap-2"
-              >
-                <div className="relative flex-1">
-                  <input
-                    type="text"
-                    value={queryInput}
-                    onChange={(e) => setQueryInput(e.target.value)}
-                    placeholder="Ask about live stock, pricing, gluten-free milks, store hours, return policies..."
-                    className="w-full h-11 pl-4 pr-10 text-[14px] bg-[#F9FAFB] border border-[#D1D5DB] rounded-md focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1B4332] focus:border-[#1B4332] transition-all"
-                  />
-                  {queryInput && (
-                    <button
-                      type="button"
-                      onClick={() => setQueryInput('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#9CA3AF] hover:text-[#374151]"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-                <button
-                  type="submit"
-                  disabled={isLoading || !queryInput.trim()}
-                  className="h-11 px-5 inline-flex items-center gap-2 text-[14px] font-medium text-white bg-[#1B4332] rounded-md hover:bg-[#164E37] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0 shadow-sm"
-                >
-                  {isLoading ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                      Retrieving...
-                    </span>
-                  ) : (
-                    <>
-                      <Send className="w-4 h-4" />
-                      Retrieve & Generate
-                    </>
-                  )}
-                </button>
-              </form>
-
-              {/* Quick Prompt Chips */}
-              <div className="space-y-1.5 pt-1">
-                <span className="text-[12px] font-medium text-[#6B7280]">Suggested Customer Inquiries:</span>
-                <div className="flex flex-wrap gap-2">
-                  {PRESET_QUERIES.map((preset) => (
-                    <button
-                      key={preset.label}
-                      type="button"
-                      onClick={() => {
-                        setQueryInput(preset.text);
-                        handleExecuteQuery(preset.text);
-                      }}
-                      className="text-[12px] px-2.5 py-1 rounded bg-[#F3F4F6] hover:bg-[#E5E7EB] text-[#374151] border border-[#E5E7EB] transition-colors text-left"
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <p className="text-xs text-[#6B7280]">
+                Conversational assistant grounded in live stock ({inventory.length} SKUs), store hours, and dietary policies.
+              </p>
             </div>
-
-            {/* Generated Response Card */}
-            {currentResponse ? (
-              <div className="bg-white rounded-lg border border-[#D8F3DC] shadow-sm overflow-hidden">
-                {/* Header */}
-                <div className="bg-[#EBF7EE] px-5 py-3.5 border-b border-[#D8F3DC] flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-full bg-[#1B4332] text-white flex items-center justify-center shrink-0 shadow-sm">
-                      <Bot className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-semibold text-[#1B4332]">
-                        Artisan Concierge Response
-                      </h3>
-                      <p className="text-[11px] text-[#40916C]">
-                        Grounded in {currentResponse.retrievedChunks.length} verified store documents
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-white text-[#2D6A4F] border border-[#D8F3DC]">
-                      {currentResponse.modelUsed === 'gemini-2.5-flash'
-                        ? 'Gemini 2.5 Flash'
-                        : 'Knowledge Synthesizer'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCopyResponse}
-                      className="px-2.5 py-1 text-xs font-medium bg-white text-[#1B4332] hover:bg-[#D8F3DC] border border-[#D8F3DC] rounded inline-flex items-center gap-1 transition-colors"
-                      title="Copy formatted answer for customer email or chat"
-                    >
-                      {copied ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-600" />
-                          Copied!
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" />
-                          Copy for Customer
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Body Content */}
-                <div className="p-6 space-y-4">
-                  <div className="text-[14px] leading-relaxed text-[#1F2937] whitespace-pre-line font-sans">
-                    {currentResponse.response}
-                  </div>
-
-                  {/* Grounding Attribution Footnote */}
-                  <div className="pt-4 border-t border-[#F3F4F6] flex flex-wrap items-center justify-between text-[12px] text-[#6B7280] gap-2">
-                    <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
-                      <ShieldCheck className="w-4 h-4" />
-                      Strict Grounding: Zero Hallucination Guardrail Active
-                    </span>
-                    <span>Generated at {new Date(currentResponse.timestamp).toLocaleTimeString()}</span>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-white rounded-lg border border-dashed border-[#D1D5DB] p-12 text-center space-y-3">
-                <div className="w-12 h-12 rounded-full bg-[#EBF7EE] text-[#1B4332] mx-auto flex items-center justify-center">
-                  <MessageSquare className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-[#111827]">
-                  Customer Inquiries & Grounded Answers
-                </h3>
-                <p className="text-sm text-[#6B7280] max-w-md mx-auto">
-                  Type any customer query above or click a suggested chip. The RAG system will extract real-time facts from your inventory ledger, store hours, and dietary policies.
-                </p>
-              </div>
-            )}
-
-            {/* Past Inquiries in this Session */}
-            {history.length > 1 && (
-              <div className="bg-white rounded-lg border border-[#E5E7EB] p-5 shadow-sm space-y-3">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-[#6B7280]">
-                  Recent Session Inquiries
-                </h4>
-                <div className="divide-y divide-[#F3F4F6]">
-                  {history.slice(1).map((item, idx) => (
-                    <div
-                      key={idx}
-                      onClick={() => setCurrentResponse(item)}
-                      className="py-2.5 flex items-center justify-between hover:bg-[#F9FAFB] cursor-pointer rounded px-2 -mx-2 transition-colors"
-                    >
-                      <span className="text-[13px] text-[#374151] font-medium truncate max-w-[80%]">
-                        "{item.query}"
-                      </span>
-                      <span className="text-[11px] text-[#9CA3AF] shrink-0 font-mono">
-                        {item.retrievedChunks.length} sources
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* Right Column: Retrieved Evidence / Grounding Chunks (4 Cols) */}
-          <div className="lg:col-span-4 space-y-5">
-            <div className="bg-white rounded-lg border border-[#E5E7EB] p-5 shadow-sm space-y-4">
-              <div className="flex items-center justify-between border-b border-[#E5E7EB] pb-3">
-                <div className="flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-[#1B4332]" />
-                  <h3 className="text-sm font-bold text-[#111827]">
-                    Retrieved Chunks & Citations
-                  </h3>
-                </div>
-                <span className="text-xs font-mono px-2 py-0.5 rounded-full bg-[#E5E7EB] text-[#374151]">
-                  {currentResponse?.retrievedChunks.length ?? 0} Chunks
-                </span>
-              </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab('chat')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors ${
+                activeTab === 'chat'
+                  ? 'bg-[#1B4332] text-white'
+                  : 'bg-[#F3F4F6] text-[#374151] hover:bg-[#E5E7EB]'
+              }`}
+            >
+              <MessageSquare className="w-3.5 h-3.5 inline mr-1" />
+              Chatbot
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('knowledge')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors ${
+                activeTab === 'knowledge'
+                  ? 'bg-[#1B4332] text-white'
+                  : 'bg-[#F3F4F6] text-[#374151] hover:bg-[#E5E7EB]'
+              }`}
+            >
+              <Database className="w-3.5 h-3.5 inline mr-1" />
+              Knowledge Base
+            </button>
+            <button
+              type="button"
+              onClick={handleExportChat}
+              title="Download chat transcript"
+              className="p-1.5 text-xs font-medium bg-white text-[#4B5563] border border-[#E5E7EB] rounded hover:bg-[#F9FAFB] transition-colors"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={handleClearChat}
+              title="Clear conversation"
+              className="p-1.5 text-xs font-medium bg-white text-red-600 border border-[#E5E7EB] rounded hover:bg-red-50 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
 
-              {currentResponse && currentResponse.retrievedChunks.length > 0 ? (
-                <div className="space-y-3">
-                  {currentResponse.retrievedChunks.map((chunk, idx) => {
-                    const isInv = chunk.category === 'inventory';
-                    const isAllergen = chunk.category === 'allergen';
-                    const isLoc = chunk.category === 'location';
+        {/* 4 Specialized RAG Applications Pills */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+          <span className="text-[11px] font-bold text-[#6B7280] uppercase tracking-wider shrink-0 mr-1">
+            Applications:
+          </span>
+          {QUICK_APPS.map((app) => (
+            <button
+              key={app.id}
+              type="button"
+              onClick={() => setActiveApp(app.id)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium shrink-0 flex items-center gap-1.5 transition-all ${
+                activeApp === app.id
+                  ? 'bg-[#1B4332] text-white shadow-sm ring-2 ring-[#74A892]'
+                  : 'bg-[#F9FAFB] text-[#4B5563] border border-[#E5E7EB] hover:bg-[#F3F4F6]'
+              }`}
+            >
+              <span>{app.icon}</span>
+              <span>{app.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
-                    return (
-                      <div
-                        key={chunk.id || idx}
-                        className="p-3.5 rounded-md border border-[#E5E7EB] bg-[#F9FAFB] hover:border-[#1B4332] transition-colors space-y-2"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span
-                            className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${
-                              isInv
-                                ? 'bg-blue-100 text-blue-800'
-                                : isAllergen
-                                ? 'bg-amber-100 text-amber-800'
-                                : isLoc
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-purple-100 text-purple-800'
-                            }`}
-                          >
-                            {chunk.category}
+      {/* CHATBOT VIEW */}
+      {activeTab === 'chat' && (
+        <div className="bg-white rounded-lg border border-[#E5E7EB] shadow-sm flex flex-col h-[650px] overflow-hidden">
+          {/* Messages Stream Container */}
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-[#F9FAFB]/50">
+            {messages.map((msg) => {
+              const isBot = msg.sender === 'assistant';
+              const isExpanded = Boolean(expandedChunks[msg.id]);
+
+              return (
+                <div
+                  key={msg.id}
+                  className={`flex gap-3 ${isBot ? 'justify-start' : 'justify-end'}`}
+                >
+                  {/* Bot Avatar */}
+                  {isBot && (
+                    <div className="w-8 h-8 rounded-full bg-[#1B4332] text-white flex items-center justify-center shrink-0 shadow-sm mt-1">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                  )}
+
+                  {/* Message Bubble Container */}
+                  <div className={`max-w-[85%] sm:max-w-[75%] space-y-2`}>
+                    <div
+                      className={`rounded-2xl px-5 py-3.5 shadow-sm text-[14px] leading-relaxed ${
+                        isBot
+                          ? 'bg-white text-[#1F2937] border border-[#E5E7EB]'
+                          : 'bg-[#1B4332] text-white rounded-br-none'
+                      }`}
+                    >
+                      <div className="whitespace-pre-line font-sans">{msg.text}</div>
+
+                      {/* Bot Message Footer */}
+                      {isBot && (
+                        <div className="pt-3 mt-3 border-t border-[#F3F4F6] flex flex-wrap items-center justify-between text-[11px] text-[#6B7280] gap-2">
+                          <span className="font-mono text-[#2D6A4F] bg-[#EBF7EE] px-2 py-0.5 rounded">
+                            {msg.modelUsed || 'RAG Synthesizer'}
                           </span>
-                          <span className="text-[11px] font-semibold text-[#2D6A4F] bg-[#D8F3DC] px-2 py-0.5 rounded-full">
-                            {chunk.relevanceScore}% Match
-                          </span>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-[#9CA3AF]">{msg.timestamp}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyMessage(msg.id, msg.text)}
+                              className="hover:text-[#111827] inline-flex items-center gap-1 transition-colors"
+                              title="Copy text"
+                            >
+                              {copiedId === msg.id ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-600" />
+                                  <span className="text-emerald-600">Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" />
+                                  <span>Copy</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
                         </div>
+                      )}
+                    </div>
 
-                        <h4 className="text-[13px] font-semibold text-[#111827] leading-snug">
-                          {chunk.title}
-                        </h4>
+                    {/* Grounding Citations Accordion (Bot Only) */}
+                    {isBot && msg.retrievedChunks && msg.retrievedChunks.length > 0 && (
+                      <div className="rounded-lg border border-[#E5E7EB] bg-white overflow-hidden text-xs">
+                        <button
+                          type="button"
+                          onClick={() => toggleChunks(msg.id)}
+                          className="w-full px-3 py-2 bg-[#F9FAFB] hover:bg-[#F3F4F6] flex items-center justify-between text-[#4B5563] font-medium transition-colors"
+                        >
+                          <span className="flex items-center gap-1.5 text-[12px]">
+                            <Layers className="w-3.5 h-3.5 text-[#1B4332]" />
+                            <strong>{msg.retrievedChunks.length} Verified Sources Grounded</strong>
+                          </span>
+                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
 
-                        <p className="text-[12px] text-[#4B5563] line-clamp-3 leading-relaxed">
-                          {chunk.content}
-                        </p>
+                        {isExpanded && (
+                          <div className="p-3 space-y-2 border-t border-[#E5E7EB] divide-y divide-[#F3F4F6]">
+                            {msg.retrievedChunks.map((c, idx) => (
+                              <div key={idx} className="pt-2 first:pt-0 space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-semibold text-[#111827] text-[12px]">
+                                    {c.title}
+                                  </span>
+                                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#D8F3DC] text-[#1B4332]">
+                                    {c.relevanceScore}% Match
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-[#6B7280] leading-snug">
+                                  {c.content}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    );
-                  })}
+                    )}
+
+                    {/* Suggested Follow-Up Chips */}
+                    {isBot && msg.suggestedFollowUps && msg.suggestedFollowUps.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {msg.suggestedFollowUps.map((chip, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => handleSendMessage(chip)}
+                            className="text-[11px] px-2.5 py-1 rounded-full bg-white hover:bg-[#D8F3DC] text-[#2D6A4F] border border-[#D8F3DC] transition-all text-left shadow-2xs font-medium"
+                          >
+                            ↳ {chip}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* User Avatar */}
+                  {!isBot && (
+                    <div className="w-8 h-8 rounded-full bg-[#E5E7EB] text-[#374151] flex items-center justify-center shrink-0 mt-1">
+                      <User className="w-4 h-4" />
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="py-8 text-center text-xs text-[#9CA3AF] space-y-2">
-                  <AlertCircle className="w-6 h-6 mx-auto text-[#D1D5DB]" />
-                  <p>No active chunks retrieved yet.</p>
-                  <p className="text-[11px]">Submit an inquiry to view the grounding citations.</p>
+              );
+            })}
+
+            {/* Live Typing Indicator */}
+            {isTyping && (
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-[#1B4332] text-white flex items-center justify-center shrink-0 animate-pulse">
+                  <Bot className="w-4 h-4" />
                 </div>
-              )}
+                <div className="bg-white border border-[#E5E7EB] rounded-2xl px-4 py-3 shadow-sm inline-flex items-center gap-2 text-xs text-[#6B7280]">
+                  <span className="flex gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#2D6A4F] animate-bounce" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#2D6A4F] animate-bounce [animation-delay:0.2s]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#2D6A4F] animate-bounce [animation-delay:0.4s]" />
+                  </span>
+                  <span>Artisan Concierge is retrieving live store facts...</span>
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Quick Prompts Bar & Query Input Container */}
+          <div className="border-t border-[#E5E7EB] bg-white p-3 sm:p-4 space-y-2.5">
+            {/* Quick Prompt Chips */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+              <span className="text-[11px] text-[#9CA3AF] shrink-0 font-medium">Try:</span>
+              {currentAppConfig.suggestedPrompts.map((promptText, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => handleSendMessage(promptText)}
+                  className="text-[11px] px-2.5 py-1 rounded bg-[#F9FAFB] hover:bg-[#E5E7EB] text-[#374151] border border-[#E5E7EB] shrink-0 transition-colors"
+                >
+                  {promptText}
+                </button>
+              ))}
             </div>
 
-            {/* Quick Location Overview Card */}
-            <div className="bg-[#F8FAF9] rounded-lg border border-[#E5E7EB] p-4 text-xs space-y-2.5">
-              <div className="font-semibold text-[#111827] flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-[#1B4332]" />
-                Store Hub Knowledge Index
+            {/* Input Form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage(inputQuery);
+              }}
+              className="flex items-center gap-2"
+            >
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={inputQuery}
+                  onChange={(e) => setInputQuery(e.target.value)}
+                  placeholder={`Ask Artisan Concierge (${currentAppConfig.label})...`}
+                  disabled={isTyping}
+                  className="w-full h-11 pl-4 pr-10 text-[14px] bg-[#F9FAFB] border border-[#D1D5DB] rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#1B4332] focus:border-[#1B4332] transition-all disabled:opacity-50"
+                />
+                {inputQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setInputQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#9CA3AF] hover:text-[#374151]"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
-              <ul className="space-y-1.5 text-[#4B5563]">
-                <li>• <strong>Flagship Roastery:</strong> Oakland (Mon-Sun)</li>
-                <li>• <strong>Downtown Café:</strong> SF Market Plaza (Mon-Sat)</li>
-                <li>• <strong>Westside Bakery:</strong> Berkeley (Wed-Sun)</li>
-              </ul>
+
+              <button
+                type="submit"
+                disabled={isTyping || !inputQuery.trim()}
+                className="h-11 px-5 inline-flex items-center gap-2 text-[14px] font-medium text-white bg-[#1B4332] rounded-lg hover:bg-[#164E37] disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0 shadow-sm"
+              >
+                <Send className="w-4 h-4" />
+                <span className="hidden sm:inline">Send</span>
+              </button>
+            </form>
+
+            <div className="flex items-center justify-between text-[11px] text-[#9CA3AF]">
+              <span className="flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                Grounded responses with verified database citations
+              </span>
+              <span>Target: {selectedLocation === 'all' ? 'All Locations' : selectedLocation.toUpperCase()}</span>
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB 2: STORE KNOWLEDGE BASE EXPLORER */}
+      {/* KNOWLEDGE BASE TAB */}
       {activeTab === 'knowledge' && (
-        <div className="space-y-6">
-          {/* Filter Bar */}
-          <div className="bg-white p-4 rounded-lg border border-[#E5E7EB] shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="bg-white rounded-lg border border-[#E5E7EB] p-5 shadow-sm space-y-5">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="relative w-full sm:w-80">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#9CA3AF]" />
               <input
                 type="text"
                 placeholder="Search knowledge documents..."
-                value={kbSearchTerm}
-                onChange={(e) => setKbSearchTerm(e.target.value)}
+                value={kbSearch}
+                onChange={(e) => setKbSearch(e.target.value)}
                 className="w-full h-9 pl-9 pr-3 text-xs bg-[#F9FAFB] border border-[#D1D5DB] rounded focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1B4332]"
               />
             </div>
@@ -454,9 +581,9 @@ export const CustomerRAGView: React.FC<CustomerRAGViewProps> = ({
                 <button
                   key={cat}
                   type="button"
-                  onClick={() => setKbFilterCategory(cat)}
+                  onClick={() => setKbCategory(cat)}
                   className={`px-3 py-1 text-xs rounded-full transition-colors ${
-                    kbFilterCategory === cat
+                    kbCategory === cat
                       ? 'bg-[#1B4332] text-white font-medium'
                       : 'bg-[#F3F4F6] text-[#4B5563] hover:bg-[#E5E7EB]'
                   }`}
@@ -467,112 +594,43 @@ export const CustomerRAGView: React.FC<CustomerRAGViewProps> = ({
             </div>
           </div>
 
-          {/* Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {filteredKnowledge.map((doc) => (
-              <div
-                key={doc.id}
-                className="bg-white rounded-lg border border-[#E5E7EB] p-5 shadow-sm flex flex-col justify-between hover:border-[#1B4332] transition-colors space-y-4"
-              >
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold tracking-wide uppercase px-2 py-0.5 rounded bg-[#EBF7EE] text-[#1B4332]">
-                      {doc.category}
-                    </span>
-                    <span className="text-[11px] text-[#9CA3AF] font-mono">
-                      {doc.lastUpdated}
-                    </span>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {knowledgeCorpus
+              .filter((doc) => {
+                const matchesCat = kbCategory === 'All' || doc.category === kbCategory;
+                const matchesText =
+                  doc.title.toLowerCase().includes(kbSearch.toLowerCase()) ||
+                  doc.body.toLowerCase().includes(kbSearch.toLowerCase());
+                return matchesCat && matchesText;
+              })
+              .map((doc) => (
+                <div
+                  key={doc.id}
+                  className="p-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] hover:border-[#1B4332] transition-colors space-y-2 flex flex-col justify-between"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#EBF7EE] text-[#1B4332]">
+                        {doc.category}
+                      </span>
+                      <span className="text-[10px] font-mono text-[#9CA3AF]">{doc.lastUpdated}</span>
+                    </div>
+                    <h4 className="text-sm font-semibold text-[#111827]">{doc.title}</h4>
+                    <p className="text-xs text-[#4B5563] line-clamp-4">{doc.body}</p>
                   </div>
-                  <h3 className="text-base font-semibold text-[#111827]">
-                    {doc.title}
-                  </h3>
-                  <p className="text-xs font-medium text-[#4B5563]">
-                    {doc.summary}
-                  </p>
-                  <p className="text-xs text-[#6B7280] leading-relaxed pt-2 border-t border-[#F3F4F6]">
-                    {doc.body}
-                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('chat');
+                      handleSendMessage(`Tell me more about ${doc.title}`);
+                    }}
+                    className="text-[11px] font-semibold text-[#1B4332] hover:underline pt-2 inline-flex items-center gap-1"
+                  >
+                    Ask chatbot about this ↳
+                  </button>
                 </div>
-
-                <div className="pt-2 text-[11px] text-[#2D6A4F] font-semibold flex items-center gap-1">
-                  Indexed for RAG Retrieval
-                  <Check className="w-3.5 h-3.5" />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: RAG PIPELINE ARCHITECTURE */}
-      {activeTab === 'architecture' && (
-        <div className="bg-white rounded-lg border border-[#E5E7EB] p-6 shadow-sm space-y-8 max-w-4xl">
-          <div>
-            <h3 className="text-lg font-bold text-[#111827]">
-              Retrieval-Augmented Generation (RAG) Architecture
-            </h3>
-            <p className="text-sm text-[#4B5563] mt-1">
-              How Artisan Commerce coordinates live inventory ledgers, store operational policies, and Gemini AI to guarantee grounded customer responses.
-            </p>
-          </div>
-
-          {/* 4-Step Diagram */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="p-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] space-y-2">
-              <div className="w-7 h-7 rounded bg-[#1B4332] text-white flex items-center justify-center font-bold text-xs">
-                1
-              </div>
-              <h4 className="text-sm font-bold text-[#111827]">Customer Inquiry</h4>
-              <p className="text-xs text-[#6B7280]">
-                Customer asks via web chat, SMS, or email about stock, allergens, or store policies.
-              </p>
-            </div>
-
-            <div className="p-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] space-y-2">
-              <div className="w-7 h-7 rounded bg-[#2D6A4F] text-white flex items-center justify-center font-bold text-xs">
-                2
-              </div>
-              <h4 className="text-sm font-bold text-[#111827]">Vector/Lexical Index</h4>
-              <p className="text-xs text-[#6B7280]">
-                RAG retriever scans active inventory onHand, supplier lead times, and store policies.
-              </p>
-            </div>
-
-            <div className="p-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] space-y-2">
-              <div className="w-7 h-7 rounded bg-[#40916C] text-white flex items-center justify-center font-bold text-xs">
-                3
-              </div>
-              <h4 className="text-sm font-bold text-[#111827]">Evidence Extraction</h4>
-              <p className="text-xs text-[#6B7280]">
-                Ranks top matching context chunks with confidence scores (0-100%) and strict bounds.
-              </p>
-            </div>
-
-            <div className="p-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] space-y-2">
-              <div className="w-7 h-7 rounded bg-[#52B788] text-[#111827] flex items-center justify-center font-bold text-xs">
-                4
-              </div>
-              <h4 className="text-sm font-bold text-[#111827]">Grounded Synthesis</h4>
-              <p className="text-xs text-[#6B7280]">
-                Gemini 2.5 Flash crafts a warm, accurate concierge answer citing verified facts.
-              </p>
-            </div>
-          </div>
-
-          {/* Active System Metrics */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-[#E5E7EB]">
-            <div className="p-3 bg-[#F8FAF9] rounded border border-[#E5E7EB]">
-              <span className="text-[11px] text-[#6B7280]">Neural Engine</span>
-              <p className="text-sm font-bold text-[#1B4332]">Gemini 2.5 Flash / SDK</p>
-            </div>
-            <div className="p-3 bg-[#F8FAF9] rounded border border-[#E5E7EB]">
-              <span className="text-[11px] text-[#6B7280]">Knowledge Scope</span>
-              <p className="text-sm font-bold text-[#1B4332]">{inventory.length} SKUs + 8 Core Policies</p>
-            </div>
-            <div className="p-3 bg-[#F8FAF9] rounded border border-[#E5E7EB]">
-              <span className="text-[11px] text-[#6B7280]">Hallucination Risk</span>
-              <p className="text-sm font-bold text-emerald-700">Protected (&lt; 0.1%)</p>
-            </div>
+              ))}
           </div>
         </div>
       )}
