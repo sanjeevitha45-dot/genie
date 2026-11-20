@@ -6,6 +6,7 @@ import {
   Package,
   RotateCcw,
   ShoppingBag,
+  Sparkles,
   Trash2,
   Truck,
   X,
@@ -71,6 +72,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'suppliers',
       label: 'Suppliers',
       icon: <Truck className="w-4 h-4 shrink-0" />,
+    },
+    {
+      id: 'customer-rag',
+      label: 'Customer Assistant (RAG)',
+      icon: <Sparkles className="w-4 h-4 shrink-0 text-[#2D6A4F]" />,
     },
   ];
 

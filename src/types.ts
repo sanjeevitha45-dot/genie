@@ -3,7 +3,8 @@ export type NavScreen =
   | 'orders'
   | 'par-expiry'
   | 'waste'
-  | 'suppliers';
+  | 'suppliers'
+  | 'customer-rag';
 
 export type LocationId = 'all' | 'roastery' | 'downtown' | 'westside';
 
@@ -101,3 +102,32 @@ export interface Supplier {
   paymentTerms: string;
   city: string;
 }
+
+export interface RAGContextChunk {
+  id: string;
+  category: 'inventory' | 'location' | 'policy' | 'supplier' | 'allergen';
+  title: string;
+  content: string;
+  relevanceScore: number; // 0 - 100
+  metadata?: Record<string, any>;
+}
+
+export interface RAGQueryResponse {
+  query: string;
+  response: string;
+  modelUsed: 'gemini-2.5-flash' | 'local-retrieval-synthesizer';
+  retrievedChunks: RAGContextChunk[];
+  suggestedFollowUps?: string[];
+  tone?: 'concierge' | 'direct' | 'technical';
+  timestamp: string;
+}
+
+export interface KnowledgeDoc {
+  id: string;
+  title: string;
+  category: 'Products' | 'Locations & Hours' | 'Policies' | 'Dietary & Allergens' | 'Wholesale';
+  summary: string;
+  body: string;
+  lastUpdated: string;
+}
+

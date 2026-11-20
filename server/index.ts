@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { supabase, isSupabaseConfigured } from './supabase.js';
+import { executeCustomerRAG, KNOWLEDGE_CORPUS } from './rag.js';
 import {
   INITIAL_INVENTORY,
   INITIAL_PURCHASE_ORDERS,
@@ -701,6 +702,52 @@ app.post('/api/seed', async (_req: Request, res: Response) => {
       error: err.message,
     });
   }
+});
+
+// -------------------------------------------------------------
+// CUSTOMER RAG (RETRIEVAL-AUGMENTED GENERATION) ENDPOINTS
+// -------------------------------------------------------------
+app.post('/api/rag/query', async (req: Request, res: Response) => {
+  const { query, location } = req.body;
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: 'Query string is required' });
+  }
+
+  // Get current inventory and suppliers
+  let currentInventory = memoryInventory;
+  let currentSuppliers = memorySuppliers;
+
+  if (isSupabaseConfigured()) {
+    try {
+      const { data: invData } = await supabase.from('inventory_items').select('*');
+      if (invData && invData.length > 0) currentInventory = invData.map(mapDbToItem);
+      const { data: supData } = await supabase.from('suppliers').select('*');
+      if (supData && supData.length > 0) currentSuppliers = supData.map(mapDbToSupplier);
+    } catch {
+      // Keep memory fallback
+    }
+  }
+
+  try {
+    const ragResult = await executeCustomerRAG(
+      query,
+      currentInventory,
+      currentSuppliers,
+      location
+    );
+    return res.json(ragResult);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'RAG generation failed', details: err.message });
+  }
+});
+
+app.get('/api/rag/knowledge', (_req: Request, res: Response) => {
+  return res.json({
+    corpus: KNOWLEDGE_CORPUS,
+    totalDocuments: KNOWLEDGE_CORPUS.length,
+    indexedInventoryCount: memoryInventory.length,
+    indexedSuppliersCount: memorySuppliers.length,
+  });
 });
 
 // Export Express app for Vercel Serverless / tests

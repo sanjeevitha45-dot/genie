@@ -1,9 +1,11 @@
 import {
   InventoryItem,
+  KnowledgeDoc,
   LocationId,
   POLineItem,
   POStatus,
   PurchaseOrder,
+  RAGQueryResponse,
   Supplier,
   WasteEntry,
   WasteReason,
@@ -206,3 +208,37 @@ export async function seedDatabase(): Promise<{ success: boolean; mode?: string;
     return { success: false, message: err.message };
   }
 }
+
+export async function queryCustomerRAG(
+  query: string,
+  location?: LocationId
+): Promise<RAGQueryResponse | null> {
+  try {
+    const res = await fetch(`${API_BASE}/rag/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, location: location === 'all' ? undefined : location }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.warn('RAG query request failed:', err);
+    return null;
+  }
+}
+
+export async function fetchKnowledgeBase(): Promise<{
+  corpus: KnowledgeDoc[];
+  totalDocuments: number;
+  indexedInventoryCount: number;
+  indexedSuppliersCount: number;
+} | null> {
+  try {
+    const res = await fetch(`${API_BASE}/rag/knowledge`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+

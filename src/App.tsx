@@ -9,6 +9,7 @@ import { Sidebar } from './components/Sidebar';
 import { SummaryCards } from './components/SummaryCards';
 import { SuppliersView } from './components/SuppliersView';
 import { WasteLogView } from './components/WasteLogView';
+import { CustomerRAGView } from './components/CustomerRAGView';
 import {
   checkBackendHealth,
   fetchInventory,
@@ -103,6 +104,10 @@ const SCREEN_META: Record<
   suppliers: {
     title: 'Suppliers & Roasters',
     subtitle: 'Active wholesale vendors, lead times, payment terms, and SKU assignments.',
+  },
+  'customer-rag': {
+    title: 'Customer Assistant & RAG System',
+    subtitle: 'AI customer response concierge grounded in live store inventory, operating hours, and dietary policies.',
   },
 };
 
@@ -717,6 +722,13 @@ export default function App() {
                   prefillSupplierId: supplierId,
                 })
               }
+            />
+          )}
+
+          {activeScreen === 'customer-rag' && (
+            <CustomerRAGView
+              inventory={scopedInventory}
+              selectedLocation={selectedLocation}
             />
           )}
         </main>
