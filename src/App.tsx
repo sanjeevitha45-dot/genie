@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Menu, Plus, ShoppingBag, Trash2 } from 'lucide-react';
+import { Check, Database, Menu, Plus, RefreshCw, ShoppingBag, Trash2 } from 'lucide-react';
 import { InventoryView } from './components/InventoryView';
 import { AddSkuModal, LogWasteModal, NewPOModal } from './components/Modals';
 import { ParExpiryView } from './components/ParExpiryView';
@@ -9,6 +9,22 @@ import { Sidebar } from './components/Sidebar';
 import { SummaryCards } from './components/SummaryCards';
 import { SuppliersView } from './components/SuppliersView';
 import { WasteLogView } from './components/WasteLogView';
+import {
+  checkBackendHealth,
+  fetchInventory,
+  fetchPurchaseOrders,
+  fetchSuppliers,
+  fetchWasteLogs,
+  createInventoryItem,
+  updateThresholds,
+  saveRecount,
+  createPurchaseOrder,
+  updatePOStatus,
+  receivePO,
+  logWaste,
+  seedDatabase,
+  BackendHealth,
+} from './services/api';
 import {
   INITIAL_INVENTORY,
   INITIAL_PURCHASE_ORDERS,
@@ -98,7 +114,37 @@ export default function App() {
     initial.purchaseOrders
   );
   const [wasteLogs, setWasteLogs] = useState<WasteEntry[]>(initial.wasteLogs);
-  const [suppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
+  const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
+  const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const refreshBackendData = async () => {
+    setIsSyncing(true);
+    const health = await checkBackendHealth();
+    setBackendHealth(health);
+    if (health.status !== 'error') {
+      try {
+        const [remoteInv, remotePOs, remoteWaste, remoteSuppliers] = await Promise.all([
+          fetchInventory(),
+          fetchPurchaseOrders(),
+          fetchWasteLogs(),
+          fetchSuppliers(),
+        ]);
+        if (remoteInv && remoteInv.length > 0) setInventory(remoteInv);
+        if (remotePOs && remotePOs.length > 0) setPurchaseOrders(remotePOs);
+        if (remoteWaste && remoteWaste.length > 0) setWasteLogs(remoteWaste);
+        if (remoteSuppliers && remoteSuppliers.length > 0) setSuppliers(remoteSuppliers);
+      } catch (e) {
+        console.warn('Backend sync error:', e);
+      }
+    }
+    setIsSyncing(false);
+    return health;
+  };
+
+  useEffect(() => {
+    refreshBackendData();
+  }, []);
 
   const [activeScreen, setActiveScreen] = useState<NavScreen>('inventory');
   const [selectedLocation, setSelectedLocation] = useState<LocationId>(
@@ -219,6 +265,7 @@ export default function App() {
     );
     setInspectingItemId(null);
     showToast('Physical recount saved and stock health updated.');
+    saveRecount(itemId, newOnHand, newPar, newReorder, note).catch(() => {});
   };
 
   const handleUpdateThresholds = (
@@ -231,6 +278,7 @@ export default function App() {
         item.id === itemId ? { ...item, parLevel, reorderPoint } : item
       )
     );
+    updateThresholds(itemId, parLevel, reorderPoint).catch(() => {});
   };
 
   const handleAddSku = (
@@ -255,6 +303,7 @@ export default function App() {
     setInventory((prev) => [created, ...prev]);
     setAddSkuOpen(false);
     showToast(`Added ${created.sku} (${created.name}) to ledger.`);
+    createInventoryItem(newItem).catch(() => {});
   };
 
   const handleSavePO = (data: {
@@ -283,6 +332,7 @@ export default function App() {
     showToast(
       `${newPO.poNumber} ${data.status === 'Draft' ? 'saved as draft' : 'submitted to supplier'}.`
     );
+    createPurchaseOrder(data).catch(() => {});
   };
 
   const handleAdvancePOStatus = (poId: string, nextStatus: POStatus) => {
@@ -290,6 +340,7 @@ export default function App() {
       prev.map((po) => (po.id === poId ? { ...po, status: nextStatus } : po))
     );
     showToast(`Purchase order updated to ${nextStatus}.`);
+    updatePOStatus(poId, nextStatus).catch(() => {});
   };
 
   const handleReceivePO = (poId: string) => {
@@ -339,6 +390,7 @@ export default function App() {
     showToast(
       `${targetPO.poNumber} received — on-hand inventory quantities updated.`
     );
+    receivePO(poId).catch(() => {});
   };
 
   const handleSaveWaste = (data: {
@@ -394,6 +446,7 @@ export default function App() {
     setWasteModalConfig({ open: false, prefillItem: null });
     setInspectingItemId(null);
     showToast(`Logged ${actualDeducted} ${targetItem.unit} waste (-$${costImpact.toFixed(2)}).`);
+    logWaste(data).catch(() => {});
   };
 
   const handleExportCsv = (itemsToExport: InventoryItem[]) => {
@@ -436,13 +489,14 @@ export default function App() {
     showToast(`Exported ${itemsToExport.length} SKUs to CSV.`);
   };
 
-  const handleResetDemoData = () => {
+  const handleResetDemoData = async () => {
     localStorage.removeItem(STORAGE_KEY);
     setInventory(INITIAL_INVENTORY);
     setPurchaseOrders(INITIAL_PURCHASE_ORDERS);
     setWasteLogs(INITIAL_WASTE_LOGS);
     setSelectedLocation('all');
     setHealthFilter('all');
+    await seedDatabase().catch(() => {});
     showToast('Workspace restored to initial sample records.');
   };
 
@@ -496,6 +550,50 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
+            {/* Supabase & Backend Sync Status Indicator */}
+            <button
+              type="button"
+              onClick={async () => {
+                const h = await refreshBackendData();
+                showToast(
+                  h.message ||
+                    (h.supabase === 'connected'
+                      ? 'Connected to Supabase Cloud'
+                      : 'Running in Local Backend mode')
+                );
+              }}
+              title={
+                backendHealth?.message ||
+                'Database connection status (click to re-sync)'
+              }
+              className="h-9 px-3 inline-flex items-center gap-2 text-xs font-medium rounded border border-[#E5E7EB] bg-white hover:bg-[#F9FAFB] text-[#374151] transition-colors"
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  backendHealth?.supabase === 'connected'
+                    ? 'bg-[#2D6A4F]'
+                    : backendHealth?.status === 'ok'
+                    ? 'bg-amber-500'
+                    : 'bg-gray-400'
+                } ${isSyncing ? 'animate-ping' : ''}`}
+              />
+              <Database className="w-3.5 h-3.5 text-[#6B7280]" />
+              <span className="hidden sm:inline">
+                {isSyncing
+                  ? 'Syncing...'
+                  : backendHealth?.supabase === 'connected'
+                  ? 'Supabase Cloud'
+                  : backendHealth?.status === 'ok'
+                  ? 'Local Backend'
+                  : 'Standalone'}
+              </span>
+              <RefreshCw
+                className={`w-3 h-3 text-[#9CA3AF] ${
+                  isSyncing ? 'animate-spin' : ''
+                }`}
+              />
+            </button>
+
             {activeScreen === 'waste' ? (
               <button
                 type="button"
