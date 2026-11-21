@@ -1,13 +1,5 @@
--- ==============================================================================
--- ARTISAN COMMERCE - SUPABASE DATABASE SCHEMA
--- ==============================================================================
--- Run this script in the Supabase SQL Editor (Dashboard -> SQL Editor -> New Query)
--- to create all required tables, indexes, Row Level Security (RLS) policies,
--- and seed data for the café & retail inventory management system.
--- ==============================================================================
 
--- 1. EXTENSIONS
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- 2. DROP TABLES IF CLEAN SLATE NEEDED (OPTIONAL)
 -- DROP TABLE IF EXISTS waste_logs CASCADE;
@@ -83,6 +75,53 @@ CREATE TABLE IF NOT EXISTS waste_logs (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 7. KNOWLEDGE BASE & VECTOR EMBEDDINGS (RAG SYSTEM)
+CREATE TABLE IF NOT EXISTS knowledge_embeddings (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL, -- 'inventory' | 'location' | 'policy' | 'supplier' | 'allergen' | 'order'
+  content TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  embedding vector(768),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Vector similarity search RPC function for RAG retrieval
+CREATE OR REPLACE FUNCTION match_knowledge_embeddings (
+  query_embedding vector(768),
+  match_threshold float DEFAULT 0.15,
+  match_count int DEFAULT 6,
+  filter_category text DEFAULT NULL
+)
+RETURNS TABLE (
+  id text,
+  title text,
+  category text,
+  content text,
+  metadata jsonb,
+  similarity float
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    ke.id,
+    ke.title,
+    ke.category,
+    ke.content,
+    ke.metadata,
+    1 - (ke.embedding <=> query_embedding) AS similarity
+  FROM knowledge_embeddings ke
+  WHERE (filter_category IS NULL OR ke.category = filter_category)
+    AND (ke.embedding IS NOT NULL)
+    AND (1 - (ke.embedding <=> query_embedding) >= match_threshold)
+  ORDER BY ke.embedding <=> query_embedding
+  LIMIT match_count;
+END;
+$$;
+
 -- 7. INDEXES FOR HIGH-VELOCITY QUERYING
 CREATE INDEX IF NOT EXISTS idx_inventory_location ON inventory_items(location_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_category ON inventory_items(category);
@@ -91,12 +130,14 @@ CREATE INDEX IF NOT EXISTS idx_orders_location ON purchase_orders(location_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON purchase_orders(status);
 CREATE INDEX IF NOT EXISTS idx_waste_location ON waste_logs(location_id);
 CREATE INDEX IF NOT EXISTS idx_waste_item_id ON waste_logs(item_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_category ON knowledge_embeddings(category);
 
 -- 8. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE inventory_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE purchase_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE waste_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_embeddings ENABLE ROW LEVEL SECURITY;
 
 -- Allow public read/write access for application operations (with anon / authenticated role)
 CREATE POLICY "Allow all operations on suppliers"
@@ -116,6 +157,11 @@ CREATE POLICY "Allow all operations on purchase_orders"
 
 CREATE POLICY "Allow all operations on waste_logs"
   ON waste_logs FOR ALL
+  USING (true)
+  WITH CHECK (true);
+
+CREATE POLICY "Allow all operations on knowledge_embeddings"
+  ON knowledge_embeddings FOR ALL
   USING (true)
   WITH CHECK (true);
 
@@ -185,4 +231,72 @@ INSERT INTO waste_logs (id, item_id, sku, item_name, location_id, quantity, unit
 VALUES
   ('w-501', 'inv-102', 'COF-COL-002', 'Colombia Huila Pink Bourbon', 'downtown', 0.45, 'kg', 11.70, 'Dial-In / Calibration', '2026-11-18 07:10', 'Maya R.', 'Morning Mythos grinder burr seasoning after deep clean'),
   ('w-502', 'inv-104', 'PAS-CRS-001', 'Artisan Butter Croissant (Tray/12)', 'downtown', 1.0, 'trays', 28.50, 'Over-Prep / End of Day', '2026-11-17 19:15', 'Julian T.', 'Unsold display pastries collected for local community compost')
+ON CONFLICT (id) DO NOTHING;
+
+-- Insert Base Knowledge Embeddings (Knowledge Base Mock Data)
+INSERT INTO knowledge_embeddings (id, title, category, content, metadata)
+VALUES
+  (
+    'kb-loc-roastery',
+    'Flagship Roastery — Hours & Services',
+    'location',
+    'Address: 412 Origin Way, Oakland, CA. Phone: (510) 891-2040. Hours: Monday-Friday 6:30 AM – 6:00 PM, Saturday-Sunday 7:00 AM – 7:00 PM. Features: On-site Loring S35 roaster, public cupping flights every Thursday at 11 AM, full pour-over bar, retail whole bean bag counter with complimentary custom grinding. Wholesale will-call pickups at Bay 2.',
+    '{"locationId": "roastery", "address": "412 Origin Way, Oakland, CA", "screen": "inventory"}'::jsonb
+  ),
+  (
+    'kb-loc-downtown',
+    'Downtown Café — Financial District Location',
+    'location',
+    'Address: 88 Market Plaza, San Francisco, CA. Phone: (415) 304-9921. Hours: Monday-Friday 6:00 AM – 5:00 PM, Saturday 7:00 AM – 4:00 PM, Sunday Closed. Offerings: Dual Synesso MVP hydra espresso machines, draft nitro cold brew, daily fresh pastry delivery from Levain Bakehouse at 6:00 AM.',
+    '{"locationId": "downtown", "address": "88 Market Plaza, San Francisco, CA", "screen": "inventory"}'::jsonb
+  ),
+  (
+    'kb-loc-westside',
+    'Westside Bakery & Tasting Room',
+    'location',
+    'Address: 1420 4th Street, Berkeley, CA. Phone: (510) 612-8871. Hours: Wednesday-Sunday 7:00 AM – 3:00 PM, Monday-Tuesday Closed for production bake prep. Offerings: In-house laminated croissants, almond bostock, country sourdough, and seasonal drinks.',
+    '{"locationId": "westside", "address": "1420 4th Street, Berkeley, CA", "screen": "inventory"}'::jsonb
+  ),
+  (
+    'kb-diet-dairy',
+    'Milk Options & Allergen Safety',
+    'allergen',
+    'Dairy: Pasture-Raised Organic Whole Milk and Nonfat Milk from Straus & Meadow (Petaluma, CA). Plant Milks: 1) Barista Edition Oat Milk — 100% Certified Gluten-Free oats, nut-free, vegan. 2) Cold-Pressed Barista Almond Milk — Contains almonds, dairy-free. Baristas use dedicated steam wands and sanitizing pitchers upon allergy request.',
+    '{"allergens": ["dairy", "gluten-free", "tree-nuts"], "screen": "inventory"}'::jsonb
+  ),
+  (
+    'kb-pol-returns',
+    'Returns, Exchanges & Handcrafted Drink Guarantee',
+    'policy',
+    'Handcrafted Beverages: If any beverage does not taste perfect or meet your temperature preference, our baristas will gladly remake it immediately or offer an alternative free of charge. Retail Coffee Bags: Unopened whole bean bags may be exchanged or returned for store credit within 14 days of roast date.',
+    '{"policyType": "returns_and_remakes", "screen": "customer-rag"}'::jsonb
+  ),
+  (
+    'kb-inv-ethiopia',
+    'Ethiopia Guji Uraga Natural (COF-ETH-001)',
+    'inventory',
+    'Product: Ethiopia Guji Uraga Natural | SKU: COF-ETH-001 | Category: Roasted Coffee | Location: ROASTERY | Stock: 18.5 kg available (Par: 40 kg, Reorder: 15 kg) | Unit Price: $24.50/kg | Tasting Notes: Bergamot, candied peach, jasmine tea. Roasted by Hearth & Origin.',
+    '{"sku": "COF-ETH-001", "itemId": "inv-101", "locationId": "roastery", "screen": "inventory"}'::jsonb
+  ),
+  (
+    'kb-inv-colombia',
+    'Colombia Huila Pink Bourbon (COF-COL-002)',
+    'inventory',
+    'Product: Colombia Huila Pink Bourbon | SKU: COF-COL-002 | Category: Roasted Coffee | Location: DOWNTOWN | Stock: 4.0 kg available (Par: 25 kg, Reorder: 8 kg) | Unit Price: $26.00/kg | Tasting Notes: Pink grapefruit, wildflower honey, sugarcane sweetness.',
+    '{"sku": "COF-COL-002", "itemId": "inv-102", "locationId": "downtown", "screen": "inventory"}'::jsonb
+  ),
+  (
+    'kb-inv-oatmilk',
+    'Barista Edition Oat Milk (MILK-BAR-001)',
+    'inventory',
+    'Product: Barista Edition Oat Milk (Case/12) | SKU: MILK-BAR-001 | Category: Dairy & Alt | Location: DOWNTOWN | Stock: 3 cases available (Par: 15 cases) | Unit Price: $38.00/case | 100% Certified Gluten-Free, vegan, zero added sugar.',
+    '{"sku": "MILK-BAR-001", "itemId": "inv-103", "locationId": "downtown", "screen": "inventory"}'::jsonb
+  ),
+  (
+    'kb-po-841',
+    'Purchase Order PO-2026-0841',
+    'order',
+    'Purchase Order: PO-2026-0841 | Supplier: Hearth & Origin Roasters | Destination: Downtown Café | Status: In Transit | Expected Delivery: 2026-11-19 | Items: 15 kg Colombia Huila Pink Bourbon ($26.00/kg).',
+    '{"poNumber": "PO-2026-0841", "poId": "po-841", "locationId": "downtown", "screen": "orders"}'::jsonb
+  )
 ON CONFLICT (id) DO NOTHING;

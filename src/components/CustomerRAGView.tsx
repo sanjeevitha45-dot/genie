@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowRight,
   Bot,
   Check,
   ChevronDown,
   ChevronUp,
   Clock,
+  Compass,
   Copy,
   Database,
   Download,
@@ -31,6 +33,7 @@ import {
   InventoryItem,
   KnowledgeDoc,
   LocationId,
+  NavigationAction,
   PurchaseOrder,
   RAGContextChunk,
 } from '../types';
@@ -39,6 +42,7 @@ interface CustomerRAGViewProps {
   inventory: InventoryItem[];
   selectedLocation: LocationId;
   purchaseOrders?: PurchaseOrder[];
+  onNavigate?: (action: NavigationAction) => void;
 }
 
 type ChatAppMode = 'all' | 'stock' | 'orders' | 'allergens' | 'locations';
@@ -116,6 +120,7 @@ export const CustomerRAGView: React.FC<CustomerRAGViewProps> = ({
   inventory,
   selectedLocation,
   purchaseOrders = [],
+  onNavigate,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -197,8 +202,14 @@ export const CustomerRAGView: React.FC<CustomerRAGViewProps> = ({
           retrievedChunks: result.retrievedChunks,
           suggestedFollowUps: result.suggestedFollowUps,
           modelUsed: result.modelUsed,
+          navigationAction: result.navigationAction,
         };
         setMessages((prev) => [...prev, botMessage]);
+
+        // Auto-navigate if the AI detected an explicit navigation command
+        if (result.navigationAction?.autoNavigate && onNavigate) {
+          onNavigate(result.navigationAction);
+        }
       } else {
         const fallback: ChatMessage = {
           id: `bot-${Date.now()}`,
@@ -411,6 +422,44 @@ export const CustomerRAGView: React.FC<CustomerRAGViewProps> = ({
                         </div>
                       )}
                     </div>
+
+                    {/* AI In-App Navigation Action Card (Bot Only) */}
+                    {isBot && msg.navigationAction && (
+                      <div className="rounded-xl border border-[#2D6A4F]/30 bg-gradient-to-r from-[#EBF7EE] to-[#F3F9F5] p-3 shadow-xs flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-[#1B4332] text-[#D8F3DC] flex items-center justify-center shrink-0 shadow-xs">
+                            <Compass className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-[#1B4332] flex items-center gap-1.5">
+                              <span>AI In-App Navigation</span>
+                              {msg.navigationAction.autoNavigate && (
+                                <span className="bg-[#2D6A4F] text-white text-[9px] px-1.5 py-0.5 rounded-full font-mono">
+                                  Auto-Navigated
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[13px] font-semibold text-[#111827] truncate">
+                              {msg.navigationAction.label}
+                            </div>
+                            {msg.navigationAction.reason && (
+                              <div className="text-[11px] text-[#6B7280] truncate">
+                                {msg.navigationAction.reason}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => onNavigate?.(msg.navigationAction!)}
+                          className="px-3.5 py-2 rounded-lg bg-[#1B4332] text-white hover:bg-[#164E37] text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all shrink-0 cursor-pointer active:scale-95"
+                        >
+                          <span>Go Now</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
 
                     {/* Grounding Citations Accordion (Bot Only) */}
                     {isBot && msg.retrievedChunks && msg.retrievedChunks.length > 0 && (

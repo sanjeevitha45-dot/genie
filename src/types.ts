@@ -112,6 +112,16 @@ export interface RAGContextChunk {
   metadata?: Record<string, any>;
 }
 
+export interface NavigationAction {
+  type: 'navigate';
+  targetScreen: NavScreen;
+  targetLocation?: LocationId;
+  inspectItemId?: string;
+  label: string;
+  autoNavigate?: boolean;
+  reason?: string;
+}
+
 export interface ChatMessage {
   id: string;
   sender: 'user' | 'assistant';
@@ -120,15 +130,17 @@ export interface ChatMessage {
   retrievedChunks?: RAGContextChunk[];
   suggestedFollowUps?: string[];
   modelUsed?: string;
+  navigationAction?: NavigationAction;
 }
 
 export interface RAGQueryResponse {
   query: string;
   response: string;
-  modelUsed: 'gemini-2.5-flash' | 'local-retrieval-synthesizer';
+  modelUsed: string;
   retrievedChunks: RAGContextChunk[];
   suggestedFollowUps?: string[];
   tone?: 'concierge' | 'direct' | 'technical';
+  navigationAction?: NavigationAction;
   timestamp: string;
 }
 

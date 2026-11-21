@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
+import { GoogleGenAI } from '@google/genai';
 import { supabase, isSupabaseConfigured } from './supabase.js';
 import { executeCustomerRAG, KNOWLEDGE_CORPUS } from './rag.js';
 import {
@@ -691,10 +692,112 @@ app.post('/api/seed', async (_req: Request, res: Response) => {
       await supabase.from('waste_logs').upsert(mapWasteToDb(w));
     }
 
+    // 5. Seed Knowledge Base Embeddings (RAG System)
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    let genAI: GoogleGenAI | null = null;
+    if (geminiApiKey && geminiApiKey !== 'MY_GEMINI_API_KEY') {
+      try {
+        genAI = new GoogleGenAI({ apiKey: geminiApiKey });
+      } catch {}
+    }
+
+    const KNOWLEDGE_MOCK_DOCS = [
+      {
+        id: 'kb-loc-roastery',
+        title: 'Flagship Roastery — Hours & Services',
+        category: 'location',
+        content: 'Address: 412 Origin Way, Oakland, CA. Phone: (510) 891-2040. Hours: Monday-Friday 6:30 AM – 6:00 PM, Saturday-Sunday 7:00 AM – 7:00 PM. Features: On-site Loring S35 roaster, public cupping flights every Thursday at 11 AM, full pour-over bar, retail whole bean bag counter with complimentary custom grinding. Wholesale will-call pickups at Bay 2.',
+        metadata: { locationId: 'roastery', address: '412 Origin Way, Oakland, CA', screen: 'inventory' },
+      },
+      {
+        id: 'kb-loc-downtown',
+        title: 'Downtown Café — Financial District Location',
+        category: 'location',
+        content: 'Address: 88 Market Plaza, San Francisco, CA. Phone: (415) 304-9921. Hours: Monday-Friday 6:00 AM – 5:00 PM, Saturday 7:00 AM – 4:00 PM, Sunday Closed. Offerings: Dual Synesso MVP hydra espresso machines, draft nitro cold brew, daily fresh pastry delivery from Levain Bakehouse at 6:00 AM.',
+        metadata: { locationId: 'downtown', address: '88 Market Plaza, San Francisco, CA', screen: 'inventory' },
+      },
+      {
+        id: 'kb-loc-westside',
+        title: 'Westside Bakery & Tasting Room',
+        category: 'location',
+        content: 'Address: 1420 4th Street, Berkeley, CA. Phone: (510) 612-8871. Hours: Wednesday-Sunday 7:00 AM – 3:00 PM, Monday-Tuesday Closed for production bake prep. Offerings: In-house laminated croissants, almond bostock, country sourdough, and seasonal drinks.',
+        metadata: { locationId: 'westside', address: '1420 4th Street, Berkeley, CA', screen: 'inventory' },
+      },
+      {
+        id: 'kb-diet-dairy',
+        title: 'Milk Options & Allergen Safety',
+        category: 'allergen',
+        content: 'Dairy: Pasture-Raised Organic Whole Milk and Nonfat Milk from Straus & Meadow (Petaluma, CA). Plant Milks: 1) Barista Edition Oat Milk — 100% Certified Gluten-Free oats, nut-free, vegan. 2) Cold-Pressed Barista Almond Milk — Contains almonds, dairy-free. Baristas use dedicated steam wands and sanitizing pitchers upon allergy request.',
+        metadata: { allergens: ['dairy', 'gluten-free', 'tree-nuts'], screen: 'inventory' },
+      },
+      {
+        id: 'kb-pol-returns',
+        title: 'Returns, Exchanges & Handcrafted Drink Guarantee',
+        category: 'policy',
+        content: 'Handcrafted Beverages: If any beverage does not taste perfect or meet your temperature preference, our baristas will gladly remake it immediately or offer an alternative free of charge. Retail Coffee Bags: Unopened whole bean bags may be exchanged or returned for store credit within 14 days of roast date.',
+        metadata: { policyType: 'returns_and_remakes', screen: 'customer-rag' },
+      },
+      {
+        id: 'kb-inv-ethiopia',
+        title: 'Ethiopia Guji Uraga Natural (COF-ETH-001)',
+        category: 'inventory',
+        content: 'Product: Ethiopia Guji Uraga Natural | SKU: COF-ETH-001 | Category: Roasted Coffee | Location: ROASTERY | Stock: 18.5 kg available (Par: 40 kg, Reorder: 15 kg) | Unit Price: $24.50/kg | Tasting Notes: Bergamot, candied peach, jasmine tea. Roasted by Hearth & Origin in Oakland.',
+        metadata: { sku: 'COF-ETH-001', itemId: 'inv-101', locationId: 'roastery', screen: 'inventory' },
+      },
+      {
+        id: 'kb-inv-colombia',
+        title: 'Colombia Huila Pink Bourbon (COF-COL-002)',
+        category: 'inventory',
+        content: 'Product: Colombia Huila Pink Bourbon | SKU: COF-COL-002 | Category: Roasted Coffee | Location: DOWNTOWN | Stock: 4.0 kg available (Par: 25 kg, Reorder: 8 kg) | Unit Price: $26.00/kg | Tasting Notes: Pink grapefruit, wildflower honey, sugarcane sweetness.',
+        metadata: { sku: 'COF-COL-002', itemId: 'inv-102', locationId: 'downtown', screen: 'inventory' },
+      },
+      {
+        id: 'kb-inv-oatmilk',
+        title: 'Barista Edition Oat Milk (MILK-BAR-001)',
+        category: 'inventory',
+        content: 'Product: Barista Edition Oat Milk (Case/12) | SKU: MILK-BAR-001 | Category: Dairy & Alt | Location: DOWNTOWN | Stock: 3 cases available (Par: 15 cases) | Unit Price: $38.00/case | 100% Certified Gluten-Free, vegan, zero added sugar. Supplied by Straus & Meadow.',
+        metadata: { sku: 'MILK-BAR-001', itemId: 'inv-103', locationId: 'downtown', screen: 'inventory' },
+      },
+      {
+        id: 'kb-po-841',
+        title: 'Purchase Order PO-2026-0841',
+        category: 'order',
+        content: 'Purchase Order: PO-2026-0841 | Supplier: Hearth & Origin Roasters | Destination: Downtown Café | Status: In Transit | Expected Delivery: 2026-11-19 | Items: 15 kg Colombia Huila Pink Bourbon ($26.00/kg).',
+        metadata: { poNumber: 'PO-2026-0841', poId: 'po-841', locationId: 'downtown', screen: 'orders' },
+      },
+    ];
+
+    for (const doc of KNOWLEDGE_MOCK_DOCS) {
+      let embedding: number[] | null = null;
+      if (genAI) {
+        try {
+          const embRes: any = await genAI.models.embedContent({
+            model: 'gemini-embedding-001',
+            contents: `${doc.title}\n${doc.content}`,
+            config: { outputDimensionality: 768 },
+          });
+          const values = embRes?.embedding?.values || embRes?.embeddings?.[0]?.values;
+          if (Array.isArray(values)) {
+            embedding = values;
+          }
+        } catch {}
+      }
+      const row: any = {
+        id: doc.id,
+        title: doc.title,
+        category: doc.category,
+        content: doc.content,
+        metadata: doc.metadata,
+        updated_at: new Date().toISOString(),
+      };
+      if (embedding) row.embedding = embedding;
+      await supabase.from('knowledge_embeddings').upsert(row);
+    }
+
     return res.json({
       success: true,
       mode: 'supabase',
-      message: 'Successfully seeded Supabase database with initial Artisan Commerce data!',
+      message: 'Successfully seeded Supabase database with initial Artisan Commerce data and vector knowledge embeddings!',
     });
   } catch (err: any) {
     return res.status(500).json({

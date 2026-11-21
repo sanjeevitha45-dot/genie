@@ -1,5 +1,16 @@
 import { GoogleGenAI } from '@google/genai';
-import { InventoryItem, KnowledgeDoc, PurchaseOrder, RAGContextChunk, RAGQueryResponse, Supplier } from '../src/types.js';
+import {
+  InventoryItem,
+  KnowledgeDoc,
+  LocationId,
+  NavScreen,
+  NavigationAction,
+  PurchaseOrder,
+  RAGContextChunk,
+  RAGQueryResponse,
+  Supplier,
+} from '../src/types.js';
+import { supabase, isSupabaseConfigured } from './supabase.js';
 
 // Base Knowledge Base Documents (Locations, Policies, Dietary, Wholesale)
 export const KNOWLEDGE_CORPUS: KnowledgeDoc[] = [
@@ -241,6 +252,249 @@ export function retrieveContextChunks(
 }
 
 // -------------------------------------------------------------
+// VECTOR RETRIEVAL: Supabase pgvector + Hybrid Keyword Search
+// -------------------------------------------------------------
+export async function retrieveContextChunksWithVector(
+  query: string,
+  inventory: InventoryItem[],
+  suppliers: Supplier[],
+  purchaseOrders: PurchaseOrder[] = [],
+  filterLocation?: string,
+  ai?: GoogleGenAI
+): Promise<RAGContextChunk[]> {
+  // 1. Always compute keyword/lexical chunks from live state
+  const lexicalChunks = retrieveContextChunks(query, inventory, suppliers, purchaseOrders, filterLocation);
+
+  // 2. If Supabase is connected and GoogleGenAI instance is available, perform vector similarity search
+  if (isSupabaseConfigured() && ai) {
+    try {
+      const embRes: any = await ai.models.embedContent({
+        model: 'gemini-embedding-001',
+        contents: query,
+        config: { outputDimensionality: 768 },
+      });
+
+      const values = embRes?.embedding?.values || embRes?.embeddings?.[0]?.values;
+      if (Array.isArray(values)) {
+        const queryVector = values;
+        const { data, error } = await supabase.rpc('match_knowledge_embeddings', {
+          query_embedding: queryVector,
+          match_threshold: 0.15,
+          match_count: 6,
+        });
+
+        if (!error && Array.isArray(data) && data.length > 0) {
+          const vectorChunks: RAGContextChunk[] = data.map((row: any) => ({
+            id: row.id,
+            category: row.category,
+            title: row.title,
+            content: row.content,
+            relevanceScore: Math.min(99, Math.round((row.similarity ?? 0.8) * 100)),
+            metadata: row.metadata || {},
+          }));
+
+          // Merge vector chunks with lexical chunks, prioritizing higher score
+          const combinedMap = new Map<string, RAGContextChunk>();
+          for (const c of [...vectorChunks, ...lexicalChunks]) {
+            const existing = combinedMap.get(c.id);
+            if (!existing || c.relevanceScore > existing.relevanceScore) {
+              combinedMap.set(c.id, c);
+            }
+          }
+          const merged = Array.from(combinedMap.values()).sort(
+            (a, b) => b.relevanceScore - a.relevanceScore
+          );
+          return merged.slice(0, 6);
+        }
+      }
+    } catch (vecErr: any) {
+      console.warn('Vector embedding retrieval skipped, falling back to lexical:', vecErr.message);
+    }
+  }
+
+  return lexicalChunks;
+}
+
+// -------------------------------------------------------------
+// AI NAVIGATION ENGINE: Detects Intent to Navigate Inside the App
+// -------------------------------------------------------------
+export function detectNavigationAction(
+  query: string,
+  chunks: RAGContextChunk[],
+  inventory: InventoryItem[]
+): NavigationAction | undefined {
+  const q = query.toLowerCase().trim();
+
+  const isExplicitNav =
+    q.includes('take me to') ||
+    q.includes('go to') ||
+    q.includes('navigate to') ||
+    q.includes('switch to') ||
+    q.includes('bring me to') ||
+    q.includes('open ') ||
+    q.includes('show me ') ||
+    q.includes('inspect ') ||
+    q.includes('look at ') ||
+    q.includes('jump to ') ||
+    q.includes('view ');
+
+  // Location detection
+  let targetLocation: LocationId | undefined = undefined;
+  if (q.includes('roastery') || q.includes('oakland')) {
+    targetLocation = 'roastery';
+  } else if (q.includes('downtown') || q.includes('sf') || q.includes('market st') || q.includes('market plaza')) {
+    targetLocation = 'downtown';
+  } else if (q.includes('westside') || q.includes('berkeley') || q.includes('4th street')) {
+    targetLocation = 'westside';
+  } else if (q.includes('all stores') || q.includes('all locations')) {
+    targetLocation = 'all';
+  }
+
+  // Item match detection (by SKU or item name)
+  let matchedItem: InventoryItem | undefined = undefined;
+  for (const item of inventory) {
+    if (q.includes(item.sku.toLowerCase()) || q.includes(item.name.toLowerCase())) {
+      matchedItem = item;
+      break;
+    }
+  }
+
+  // If no direct query text match, inspect top retrieved inventory chunk
+  if (!matchedItem && chunks.length > 0 && chunks[0].category === 'inventory') {
+    const chunkSku = chunks[0].metadata?.sku;
+    if (chunkSku) {
+      matchedItem = inventory.find((i) => i.sku.toLowerCase() === chunkSku.toLowerCase());
+    }
+  }
+
+  if (matchedItem && !targetLocation) {
+    targetLocation = matchedItem.locationId as LocationId;
+  }
+
+  // 1. Orders / PO Tracking Screen
+  if (
+    q.includes('order') ||
+    q.includes('po-') ||
+    q.includes('po #') ||
+    q.includes('purchase order') ||
+    q.includes('tracking') ||
+    q.includes('track') ||
+    q.includes('shipment') ||
+    q.includes('in transit') ||
+    (chunks.length > 0 && chunks[0].category === 'order')
+  ) {
+    const poNum = chunks.find((c) => c.category === 'order')?.metadata?.poNumber;
+    return {
+      type: 'navigate',
+      targetScreen: 'orders',
+      targetLocation,
+      label: poNum ? `Track ${poNum} in Orders` : 'View Purchase Orders',
+      autoNavigate: isExplicitNav,
+      reason: `Found active purchase order tracking for "${query}"`,
+    };
+  }
+
+  // 2. Waste & Spoilage Log Screen
+  if (
+    q.includes('waste') ||
+    q.includes('spoil') ||
+    q.includes('spoilage') ||
+    q.includes('shrinkage') ||
+    q.includes('discard') ||
+    q.includes('spill') ||
+    q.includes('compost') ||
+    q.includes('loss')
+  ) {
+    return {
+      type: 'navigate',
+      targetScreen: 'waste',
+      targetLocation,
+      label: targetLocation
+        ? `View ${targetLocation.toUpperCase()} Waste & Spoilage Log`
+        : 'View Waste & Spoilage Log',
+      autoNavigate: isExplicitNav,
+      reason: 'Navigating to waste and shrinkage records',
+    };
+  }
+
+  // 3. Par Levels & Expiry Screen
+  if (
+    q.includes('par') ||
+    q.includes('expir') ||
+    q.includes('shelf life') ||
+    q.includes('threshold') ||
+    q.includes('reorder point') ||
+    q.includes('perishable')
+  ) {
+    return {
+      type: 'navigate',
+      targetScreen: 'par-expiry',
+      targetLocation,
+      inspectItemId: matchedItem?.id,
+      label: targetLocation
+        ? `View ${targetLocation.toUpperCase()} Par Levels & Expiry`
+        : 'View Par Levels & Expiry',
+      autoNavigate: isExplicitNav,
+      reason: 'Reviewing par thresholds and expiry dates',
+    };
+  }
+
+  // 4. Specific Inventory Item Inspection
+  if (matchedItem) {
+    return {
+      type: 'navigate',
+      targetScreen: 'inventory',
+      targetLocation: (matchedItem.locationId as LocationId) || targetLocation,
+      inspectItemId: matchedItem.id,
+      label: `Inspect ${matchedItem.name} (${matchedItem.sku})`,
+      autoNavigate: isExplicitNav,
+      reason: `Located item ${matchedItem.sku} in ${matchedItem.locationId}`,
+    };
+  }
+
+  // 5. Wholesale Suppliers & Roasters Screen
+  const mentionsSupplier =
+    q.includes('supplier') ||
+    q.includes('vendor') ||
+    q.includes('distributor') ||
+    (q.includes('roaster') && !q.includes('roastery'));
+
+  if (mentionsSupplier || (chunks.length > 0 && chunks[0].category === 'supplier' && mentionsSupplier)) {
+    return {
+      type: 'navigate',
+      targetScreen: 'suppliers',
+      targetLocation,
+      label: 'View Wholesale Suppliers & Roasters',
+      autoNavigate: isExplicitNav,
+      reason: 'Reviewing wholesale supplier contracts and contacts',
+    };
+  }
+
+  // 6. General Inventory Ledger Navigation
+  if (
+    q.includes('inventory') ||
+    q.includes('stock') ||
+    q.includes('ledger') ||
+    q.includes('catalog') ||
+    targetLocation !== undefined ||
+    isExplicitNav
+  ) {
+    return {
+      type: 'navigate',
+      targetScreen: 'inventory',
+      targetLocation,
+      label: targetLocation
+        ? `Open ${targetLocation.toUpperCase()} Inventory Ledger`
+        : 'Open Inventory Ledger',
+      autoNavigate: isExplicitNav,
+      reason: 'Exploring store inventory catalog',
+    };
+  }
+
+  return undefined;
+}
+
+// -------------------------------------------------------------
 // LOCAL FALLBACK SYNTHESIZER: Produces grounded response when GEMINI_API_KEY is unset
 // -------------------------------------------------------------
 function synthesizeLocalGroundedResponse(query: string, chunks: RAGContextChunk[]): string {
@@ -303,8 +557,28 @@ export async function executeCustomerRAG(
   filterLocation?: string,
   chatHistory: { role: 'user' | 'assistant'; content: string }[] = []
 ): Promise<RAGQueryResponse> {
-  const chunks = retrieveContextChunks(query, inventory, suppliers, purchaseOrders, filterLocation);
   const apiKey = process.env.GEMINI_API_KEY;
+  let ai: GoogleGenAI | undefined = undefined;
+  if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
+    try {
+      ai = new GoogleGenAI({ apiKey });
+    } catch {
+      // Continue without AI instance
+    }
+  }
+
+  // Retrieve context chunks using vector search (Supabase pgvector) + lexical hybrid
+  const chunks = await retrieveContextChunksWithVector(
+    query,
+    inventory,
+    suppliers,
+    purchaseOrders,
+    filterLocation,
+    ai
+  );
+
+  // Detect in-app navigation action
+  const navigationAction = detectNavigationAction(query, chunks, inventory);
 
   // Tailored follow-up chips based on detected intent
   const qLower = query.toLowerCase();
@@ -336,11 +610,9 @@ export async function executeCustomerRAG(
     ];
   }
 
-  // If Gemini API Key is provided, use Google GenAI
-  if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
+  // If Gemini AI instance is initialized, use Google GenAI
+  if (ai) {
     try {
-      const ai = new GoogleGenAI({ apiKey });
-
       const contextText = chunks.length > 0
         ? chunks.map((c, i) => `[Source ${i + 1}: ${c.title} (${c.category})]\n${c.content}`).join('\n\n')
         : 'No specific store records found for this query.';
@@ -375,20 +647,26 @@ ${contextText}
         parts: [{ text: `Customer Inquiry: "${query}"\n\nConcierge Response:` }],
       });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini API call timed out after 9s')), 9000)
+      );
+
+      const generatePromise = ai.models.generateContent({
+        model: 'gemini-3.8-flash',
         contents,
       });
 
-      const replyText = response.text || synthesizeLocalGroundedResponse(query, chunks);
+      const response: any = await Promise.race([generatePromise, timeoutPromise]);
+      const replyText = response?.text || synthesizeLocalGroundedResponse(query, chunks);
 
       return {
         query,
         response: replyText,
-        modelUsed: 'gemini-2.5-flash',
+        modelUsed: 'gemini-3.8-flash',
         retrievedChunks: chunks,
         suggestedFollowUps,
         tone: 'concierge',
+        navigationAction,
         timestamp: new Date().toISOString(),
       };
     } catch (err: any) {
@@ -405,6 +683,7 @@ ${contextText}
     retrievedChunks: chunks,
     suggestedFollowUps,
     tone: 'concierge',
+    navigationAction,
     timestamp: new Date().toISOString(),
   };
 }

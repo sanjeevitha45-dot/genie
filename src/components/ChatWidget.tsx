@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArrowRight,
   Bot,
   Check,
   ChevronDown,
+  Compass,
   Layers,
   Maximize2,
   MessageSquare,
@@ -12,16 +14,18 @@ import {
   X,
 } from 'lucide-react';
 import { queryCustomerRAG } from '../services/api';
-import { ChatMessage, LocationId } from '../types';
+import { ChatMessage, LocationId, NavigationAction } from '../types';
 
 interface ChatWidgetProps {
   selectedLocation: LocationId;
   onOpenFullApp?: () => void;
+  onNavigate?: (action: NavigationAction) => void;
 }
 
 export const ChatWidget: React.FC<ChatWidgetProps> = ({
   selectedLocation,
   onOpenFullApp,
+  onNavigate,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -75,8 +79,13 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({
             retrievedChunks: res.retrievedChunks,
             suggestedFollowUps: res.suggestedFollowUps,
             modelUsed: res.modelUsed,
+            navigationAction: res.navigationAction,
           },
         ]);
+
+        if (res.navigationAction?.autoNavigate && onNavigate) {
+          onNavigate(res.navigationAction);
+        }
       } else {
         setMessages((prev) => [
           ...prev,
@@ -186,6 +195,32 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({
                     >
                       {m.text}
                     </div>
+
+                    {/* AI In-App Navigation Action Button */}
+                    {isBot && m.navigationAction && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onNavigate?.(m.navigationAction!);
+                        }}
+                        className="w-full text-left p-2.5 rounded-xl bg-gradient-to-r from-[#EBF7EE] to-[#F3F9F5] hover:from-[#D8F3DC] hover:to-[#EBF7EE] border border-[#2D6A4F]/30 flex items-center justify-between gap-2 transition-all cursor-pointer group shadow-xs active:scale-[0.98]"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-6 h-6 rounded-md bg-[#1B4332] text-white flex items-center justify-center shrink-0">
+                            <Compass className="w-3.5 h-3.5" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-[#1B4332]">
+                              AI Navigation
+                            </div>
+                            <span className="text-[11px] font-bold text-[#111827] truncate block">
+                              {m.navigationAction.label}
+                            </span>
+                          </div>
+                        </div>
+                        <ArrowRight className="w-3.5 h-3.5 text-[#1B4332] shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                      </button>
+                    )}
 
                     {/* Citations Count Tag */}
                     {isBot && m.retrievedChunks && m.retrievedChunks.length > 0 && (

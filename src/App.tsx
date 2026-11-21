@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Database, Menu, Plus, RefreshCw, ShoppingBag, Trash2 } from 'lucide-react';
+import { Check, Compass, Database, Menu, Plus, RefreshCw, ShoppingBag, Trash2 } from 'lucide-react';
 import { InventoryView } from './components/InventoryView';
 import { AddSkuModal, LogWasteModal, NewPOModal } from './components/Modals';
 import { ParExpiryView } from './components/ParExpiryView';
@@ -40,6 +40,7 @@ import {
   InventoryItem,
   LocationId,
   NavScreen,
+  NavigationAction,
   POLineItem,
   POStatus,
   PurchaseOrder,
@@ -506,6 +507,19 @@ export default function App() {
     showToast('Workspace restored to initial sample records.');
   };
 
+  const handleAiNavigate = (action: NavigationAction) => {
+    if (action.targetScreen) {
+      setActiveScreen(action.targetScreen);
+    }
+    if (action.targetLocation) {
+      setSelectedLocation(action.targetLocation);
+    }
+    if (action.inspectItemId) {
+      setInspectingItemId(action.inspectItemId);
+    }
+    showToast(`Navigated to: ${action.label}`);
+  };
+
   const currentLocationLabel =
     LOCATIONS.find((l) => l.id === selectedLocation)?.label ?? 'All Locations';
   const meta = SCREEN_META[activeScreen];
@@ -731,6 +745,7 @@ export default function App() {
               inventory={scopedInventory}
               selectedLocation={selectedLocation}
               purchaseOrders={scopedPOs}
+              onNavigate={handleAiNavigate}
             />
           )}
         </main>
@@ -784,6 +799,7 @@ export default function App() {
       <ChatWidget
         selectedLocation={selectedLocation}
         onOpenFullApp={() => setActiveScreen('customer-rag')}
+        onNavigate={handleAiNavigate}
       />
 
       {/* Non-intrusive Toast Notification */}
